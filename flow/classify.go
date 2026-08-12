@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/go-go-golems/flowkit/execution"
 )
@@ -116,57 +115,13 @@ func (e *StatusError) Unwrap() error { return e.Err }
 // HTTPStatus implements the typed-status interface tier one matches on.
 func (e *StatusError) HTTPStatus() int { return e.Status }
 
-// transientMarker is one entry of the single shared substring fallback
-// table. Every entry names the incident (or failure family) that earned its
-// place; the table's test enforces that. Adding a marker anywhere else in
-// the repository is a review smell.
-type transientMarker struct {
-	marker   string
-	incident string
-}
-
-// transientMarkers is migrated verbatim from generation/retry.go (the
-// pre-flow retry wrapper), incident comments preserved as incident names.
-var transientMarkers = []transientMarker{
-	{"status=429", "provider concurrency/rate limit verdicts"},
-	{"status=408", "provider request timeout verdicts"},
-	{"status=5", "provider 5xx failures"},
-	{"CONCURRENT_REQUEST_LIMIT", "gateway concurrency refusals during summary builds"},
-	{"rate limit", "stringly rate-limit messages (lowercase)"},
-	{"Rate limit", "stringly rate-limit messages (capitalized)"},
-	{"connection reset", "transport drops mid-stream"},
-	{"connection refused", "provider restarts between calls"},
-	{"broken pipe", "transport drops mid-write"},
-	{"unexpected EOF", "embeddings item 49 death after 13,847 completed summaries (2026-07-31)"},
-	{"EOF", "dropped streams reported as bare EOF"},
-	{"stream receive", "geppetto stream receive failures"},
-	{"timeout", "transport timeouts (lowercase)"},
-	{"Timeout", "transport timeouts (capitalized)"},
-	{"timed out", `"read: connection timed out" — killed judge relaunch at item 3 (2026-07-31)`},
-	{"network is unreachable", "local network/VPN blip during judge run (2026-07-31)"},
-	{"no route to host", "local network/VPN blips"},
-	{"stream error", "HTTP/2 stream resets from the peer"},
-	{"INTERNAL_ERROR", `HTTP/2 "INTERNAL_ERROR" that killed screening at llm-chunk (2026-07-31)`},
-	{"temporarily unavailable", "provider-side temporary unavailability"},
-	{"TLS handshake", "TLS handshake failures on flaky links"},
-	// OpenAI embeddings over a flaky link can fail mid-record, not just at
-	// handshake; Go reports it as "remote error: tls: bad record MAC".
-	{"tls: bad record MAC", "corpus-2000 build died at embeddings item 81 on a TLS record error (2026-07-31, tmux-logs/build-2000-final.log)"},
-	// Reasoning-mode models occasionally emit a stream that is all hidden
-	// reasoning and no content; the adapter reports it as an empty response.
-	// A deterministic empty burns the attempts and still fails loudly.
-	{"generation response is empty", "judge run 3566e8654e92 died at item 308 on an all-reasoning stream (2026-07-31)"},
-}
-
-// defaultClassifier implements the three-tier classification described in
-// the RAG-TTC-FLOW-001 design doc §5.3.
+// defaultClassifier applies only domain-neutral, typed rules. Applications may
+// provide a classifier through RetrySpec when they need provider-specific or
+// legacy string matching.
 type defaultClassifier struct{}
 
-// DefaultClassifier is the shared classifier: (1) typed statuses via
-// errors.As — 429/408/5xx transient, other statuses fatal; (2) context
-// cancellation and budget exhaustion are fatal, never retried; (3) the ONE
-// substring fallback table, migrated verbatim from generation/retry.go.
-// Anything unrecognized is fatal: fail closed, visibly.
+// DefaultClassifier handles explicit data markers, context cancellation, budget
+// exhaustion, and typed HTTP statuses. Anything unrecognized is fatal.
 var DefaultClassifier Classifier = defaultClassifier{}
 
 // Classify implements Classifier.
@@ -195,19 +150,6 @@ func (defaultClassifier) Classify(err error) ErrorClass {
 			return Transient
 		default:
 			return Fatal
-		}
-	}
-	// Stringly cancellation (geppetto errors are partly stringly and can
-	// bury the typed chain).
-	message := err.Error()
-	if strings.Contains(message, "context canceled") ||
-		strings.Contains(message, "context deadline exceeded") {
-		return Fatal
-	}
-	// Tier three: the single substring fallback table.
-	for _, entry := range transientMarkers {
-		if strings.Contains(message, entry.marker) {
-			return Transient
 		}
 	}
 	return Fatal

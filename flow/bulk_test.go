@@ -119,7 +119,7 @@ func TestBulkDeduplicatesKeysAndChargesUniqueMisses(t *testing.T) {
 
 func TestBulkRetriesTransientBatchFailures(t *testing.T) {
 	base := bulkStep("flaky-bulk")
-	base.Policy.Retry = fastRetry(3)
+	base.Policy.Retry = transientStringRetry(3)
 	var calls atomic.Int64
 	step := Bulk(base, func(_ context.Context, batch []int) ([]int, error) {
 		if calls.Add(1) < 2 {
@@ -149,7 +149,7 @@ func TestBulkRetriesTransientBatchFailures(t *testing.T) {
 
 func TestBulkChargesEveryRetryAttemptAgainstAdmission(t *testing.T) {
 	base := bulkStep("budgeted-bulk-retry")
-	base.Policy.Retry = fastRetry(3)
+	base.Policy.Retry = transientStringRetry(3)
 	base.Policy.Admission = []Resource{{Name: "embedding-items", Ceiling: 6, Budget: 2}}
 	var calls atomic.Int64
 	step := Bulk(base, func(_ context.Context, _ []int) ([]int, error) {
@@ -165,7 +165,7 @@ func TestBulkChargesEveryRetryAttemptAgainstAdmission(t *testing.T) {
 
 func TestBulkAttemptMeterCountsReturnedValuesOnEveryAttempt(t *testing.T) {
 	base := bulkStep("metered-bulk-retry")
-	base.Policy.Retry = fastRetry(2)
+	base.Policy.Retry = transientStringRetry(2)
 	base.AttemptMeter = func(value int, _ error) Meters { return Meters{"tokens": float64(value)} }
 	var calls atomic.Int64
 	step := Bulk(base, func(_ context.Context, batch []int) ([]int, error) {
@@ -182,7 +182,7 @@ func TestBulkAttemptMeterCountsReturnedValuesOnEveryAttempt(t *testing.T) {
 
 func TestBulkRetryLedgerFailurePropagates(t *testing.T) {
 	base := bulkStep("retry-ledger-failure")
-	base.Policy.Retry = fastRetry(2)
+	base.Policy.Retry = transientStringRetry(2)
 	step := Bulk(base, func(context.Context, []int) ([]int, error) {
 		return nil, errors.New("unexpected EOF")
 	}, 10)

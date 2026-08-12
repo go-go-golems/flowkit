@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -33,7 +34,25 @@ func doubler(name string, policy Policy) Step[int, int] {
 }
 
 func fastRetry(attempts int) RetrySpec {
-	return RetrySpec{Attempts: attempts, Backoff: Backoff{Base: time.Millisecond, Cap: 2 * time.Millisecond}}
+	return RetrySpec{
+		Attempts: attempts,
+		Backoff:  Backoff{Base: time.Millisecond, Cap: 2 * time.Millisecond},
+	}
+}
+
+func transientStringRetry(attempts int) RetrySpec {
+	retry := fastRetry(attempts)
+	retry.Class = ClassifierFunc(func(err error) ErrorClass {
+		if IsDataError(err) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return DefaultClassifier.Classify(err)
+		}
+		message := err.Error()
+		if strings.Contains(message, "timed out") || strings.Contains(message, "unexpected EOF") {
+			return Transient
+		}
+		return DefaultClassifier.Classify(err)
+	})
+	return retry
 }
 
 func TestRetryArithmeticSaturatesAtCap(t *testing.T) {
@@ -176,7 +195,7 @@ func TestRunRetriesTransientErrorsWithCounts(t *testing.T) {
 	var calls atomic.Int64
 	step := Step[int, int]{
 		Name:   "flaky",
-		Policy: Policy{Retry: fastRetry(4)},
+		Policy: Policy{Retry: transientStringRetry(4)},
 		Do: func(_ context.Context, value int) (int, error) {
 			if calls.Add(1) < 3 {
 				return 0, errors.New("read: connection timed out")
@@ -197,7 +216,7 @@ func TestRunChargesEveryRetryAttemptAgainstAdmission(t *testing.T) {
 	step := Step[int, int]{
 		Name: "budgeted-retry",
 		Policy: Policy{
-			Retry:     fastRetry(3),
+			Retry:     transientStringRetry(3),
 			Admission: []Resource{{Name: "provider-calls", Ceiling: 3, Budget: 1}},
 		},
 		Do: func(_ context.Context, _ int) (int, error) {

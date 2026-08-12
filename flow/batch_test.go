@@ -251,7 +251,7 @@ func TestBatchedSplitErrorSendsWholeGroupToRepair(t *testing.T) {
 func TestBatchedQuarantinedGroupRoutesItemsToRepair(t *testing.T) {
 	var repairCalls atomic.Int64
 	spec := BatchSpec[string, string]{
-		Policy: Policy{Workers: 1, OnError: Quarantine, Retry: fastRetry(2)},
+		Policy: Policy{Workers: 1, OnError: Quarantine, Retry: transientStringRetry(2)},
 		Group:  groupsOf(2),
 		DoAll: func(_ context.Context, _ []string) (string, error) {
 			return "", errors.New("read: connection timed out")
