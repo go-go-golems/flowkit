@@ -24,3 +24,15 @@ Step 4: extracted execution primitives, minimal private support, authoritative K
 - /home/manuel/workspaces/2026-08-12/extract-flowkit/flowkit/boundary_test.go — Enforces no ragkit dependency
 - /home/manuel/workspaces/2026-08-12/extract-flowkit/flowkit/execution/cache.go — Extracted durable cache and centralized key digest
 
+
+## 2026-08-12
+
+Steps 5-7: extracted Flow, separated ragkit classifier policy, locked cache compatibility, migrated and removed ragkit packages, and added README, Glazed developer guide, and runnable examples.
+
+### Related Files
+
+- /home/manuel/workspaces/2026-08-12/extract-flowkit/flowkit/README.md — Flowkit project README
+- /home/manuel/workspaces/2026-08-12/extract-flowkit/flowkit/docs/flowkit-developer-guide.md — Glazed developer guide
+- /home/manuel/workspaces/2026-08-12/extract-flowkit/flowkit/flow/classify.go — Generic classifier boundary
+- /home/manuel/workspaces/2026-08-12/extract-flowkit/ragkit/rag/flowpolicy/classifier.go — Ragkit historical classifier policy
+

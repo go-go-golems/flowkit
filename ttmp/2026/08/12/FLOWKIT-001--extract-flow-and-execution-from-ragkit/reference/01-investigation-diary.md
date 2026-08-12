@@ -10,16 +10,27 @@ DocType: reference
 Intent: long-term
 Owners: []
 RelatedFiles:
+    - Path: repo://README.md
+      Note: Step 7 library overview (commit 83d422c)
     - Path: repo://boundary_test.go
       Note: Step 4 extraction boundary guard (commit 2042a08)
+    - Path: repo://docs/flowkit-developer-guide.md
+      Note: Step 7 Glazed developer guide (commit 83d422c)
     - Path: repo://execution/cache.go
       Note: Step 4 cache extraction and digest ownership (commit 2042a08)
+    - Path: repo://execution/cache_compat_test.go
+      Note: Step 6 compatibility fixture test (commit 2b23e34)
+    - Path: repo://flow/classify.go
+      Note: Step 5 generic classifier (commit 685cb15)
+    - Path: ws://ragkit/rag/flowpolicy/classifier.go
+      Note: Step 6 application retry policy (commit 603a2e5)
 ExternalSources: []
 Summary: Chronological evidence, commands, failures, decisions, and review guidance for the Flowkit extraction analysis.
 LastUpdated: 2026-08-12T23:18:00-04:00
 WhatFor: Resume or review the extraction investigation without repeating discovery work.
 WhenToUse: Before continuing FLOWKIT-001 or reviewing the architecture guide and extraction plan.
 ---
+
 
 
 # Diary
@@ -388,3 +399,225 @@ The key digest is a persisted compatibility boundary, not merely an internal hel
 ### Technical details
 
 The extracted cache retains `rag-ttc-execution-cache/v1`. The module import path changes, but cache keys and envelope bytes do not.
+
+## Step 5: Extract Flow and separate application retry policy
+
+The typed Flow layer moved without redesigning its public execution model. After the mechanical extraction, Flowkit's default classifier was reduced to domain-neutral typed rules, while ragkit gained an explicit `rag/flowpolicy` classifier that preserves every historical provider string marker and installs it at embedding and generation boundaries.
+
+This step also recorded a failed test-refactor attempt. A shared test helper initially classified every error as transient, which caused fatal and data-error tests to retry. The corrected tests install narrow string classifiers only where they are testing historical retry-shaped execution; generic classifier tests remain fail-closed.
+
+### Prompt Context
+
+**User prompt (verbatim):** (same as Step 4)
+
+**Assistant interpretation:** Extract Flow while retaining only approved generic policy and preserving ragkit behavior explicitly.
+
+**Inferred user intent:** Make Flowkit reusable without losing provider resilience in ragkit.
+
+**Commit (code):** c5ee7279f013c738a9fd7f4b15ab2645e17589fb — "feat(flow): extract typed orchestration"
+
+**Commit (code):** 685cb15d313943ec8d82c24d3fa20928d4b79e98 — "refactor(flow): keep default error classification generic"
+
+### What I did
+
+- Extracted all Flow production files and tests against Flowkit execution.
+- Removed incident-specific substring matching from Flowkit's default classifier.
+- Retained typed HTTP status, data marker, cancellation, deadline, budget, and fatal-unknown behavior.
+- Added targeted test classifiers where tests intentionally exercise stringly transient failures.
+
+### Why
+
+- Generic orchestration must not encode one application's incident history.
+- Classifier separation was one of the four explicitly approved extraction simplifications.
+
+### What worked
+
+- The mechanical Flow extraction passed before policy separation.
+- The corrected classifier suite passed after narrowing test-only classifier behavior.
+
+### What didn't work
+
+The first classifier test run failed because generic Flowkit no longer treated historical strings as transient. The second attempt changed `fastRetry` to classify every error as transient and produced failures such as:
+
+```text
+TestRunDoesNotRetryFatalOrCancellation: expected 1 call, actual 5
+TestRunQuarantineTurnsItemErrorsIntoRecords: expected 1 quarantined, actual 0
+```
+
+The underlying issue was classifier precedence, not retry mechanics. I restored `fastRetry` to generic behavior and introduced a narrow `transientStringRetry` helper that preserves data and cancellation verdicts.
+
+### What I learned
+
+- A classifier chain cannot be introduced safely without an explicit “unrecognized” result; `Fatal` currently serves both recognized fatal and fail-closed unknown errors.
+- Application-owned policy is simpler and safer than expanding Flowkit's classifier API during extraction.
+
+### What was tricky to build
+
+String markers can overlap cancellation text and data-error messages. The original classifier gave explicit markers and cancellation precedence over substring matching. Ragkit's extracted policy retains that exact ordering.
+
+### What warrants a second pair of eyes
+
+- Review `rag/flowpolicy/classifier.go` marker completeness and precedence.
+- Confirm every ragkit flow construction boundary installs the policy unless a caller supplied its own classifier.
+
+### What should be done in the future
+
+- Prefer typed provider errors so ragkit can eventually retire string matching incident by incident.
+
+### Code review instructions
+
+- Compare `flow/classify.go` with `rag/flowpolicy/classifier.go`.
+- Run `GOWORK=off go test ./flow -count=1` in Flowkit and `GOWORK=off go test ./rag/flowpolicy ./rag/embedding ./rag/generation -count=1` in ragkit.
+
+### Technical details
+
+Flowkit unknown errors remain fatal. Ragkit's `Policy` and `Retry` helpers only supply the historical classifier when `RetrySpec.Class` is nil.
+
+## Step 6: Lock cache compatibility and migrate ragkit consumers
+
+A literal pre-extraction cache file now proves that Flowkit computes the same key digest, path shard, schema, value digest, and strict decoded value as ragkit. Ragkit then migrated every old `flow` and `execution` import to Flowkit, introduced the application classifier, and deleted the extracted source packages after the complete suite passed.
+
+The migration uses a temporary local module replacement because Flowkit is not yet tagged. That replacement is explicitly not a final release state and must be removed after `v0.1.0` is available.
+
+### Prompt Context
+
+**User prompt (verbatim):** (same as Step 4)
+
+**Assistant interpretation:** Preserve expensive-work data while switching all in-repository consumers and removing the old implementation.
+
+**Inferred user intent:** Finish a real extraction, not a copied duplicate that leaves ragkit as the canonical implementation.
+
+**Commit (code):** 2b23e341ea55d194c7d0a6b228e6653731c2b3da — "test: lock classifier and cache extraction contracts"
+
+**Commit (code):** 603a2e59b3bd7bce6b3668f9411e161accecf422 — "refactor(ragkit): consume Flowkit module"
+
+**Commit (code):** 9ce4f5c60c7a41342a592c18cf68a26cc1239317 — "chore(ragkit): remove extracted packages"
+
+### What I did
+
+- Added a literal cache fixture under `execution/testdata/pre-extraction-cache`.
+- Asserted the exact key digest and loaded value through Flowkit `FileCache`.
+- Rewrote every ragkit production and test import for both old package paths.
+- Added and tested `rag/flowpolicy`.
+- Ran all ragkit tests before and after deleting `ragkit/flow` and `ragkit/execution`.
+
+### Why
+
+- Cache interoperability is the extraction's persisted-data release contract.
+- Deleting old packages proves ragkit genuinely consumes Flowkit and prevents implementations from drifting.
+
+### What worked
+
+- Flowkit unit and focused race tests passed with the fixture.
+- Ragkit's full test suite passed with local Flowkit before deletion and after deletion.
+- Repository search found no old ragkit flow/execution imports.
+
+### What didn't work
+
+- `go mod tidy` initially attempted to download nonexistent `flowkit v0.0.0`; adding a temporary local `replace` allowed module-local validation.
+- Two commit attempts failed `make fmt-check` because broad import rewrites left six files unformatted. `gofmt -l` identified them exactly; formatting that complete list resolved the hook. Tests had passed during both failed commits.
+
+### What I learned
+
+- Consumer scope included reranking and cached provider decorators that use low-level execution directly, not only embedding and generation Flow adapters.
+- The repository pre-commit hook runs a stricter repository-wide format check than formatting only files edited manually.
+
+### What was tricky to build
+
+The safe deletion sequence was migrate imports, test everything with both source trees present, then delete old trees and rerun everything. Deleting earlier would have made it harder to distinguish missing migration from implementation breakage.
+
+### What warrants a second pair of eyes
+
+- Verify no external/private consumer needs a compatibility shim; none was added.
+- Verify the temporary `replace github.com/go-go-golems/flowkit => ../flowkit` is removed after tagging.
+- Review cache fixture provenance and literal bytes.
+
+### What should be done in the future
+
+- Tag Flowkit `v0.1.0`, update ragkit's requirement, remove the local replacement, and validate through the module proxy or direct VCS.
+
+### Code review instructions
+
+- Review ragkit commit `603a2e5` before deletion commit `9ce4f5c`.
+- Run `rg 'github.com/go-go-golems/ragkit/(flow|execution)' ragkit --glob '*.go'` and the full tests.
+
+### Technical details
+
+The fixture expects key digest `de7120bfe3cbfd54a6f5559293e5cf14fd4f8c55a87628c75a6be447ea59f17d` and schema `rag-ttc-execution-cache/v1`.
+
+## Step 7: Add developer documentation and runnable examples
+
+Flowkit now has a library-focused README, a long-form developer guide with valid Glazed help-entry frontmatter, and three runnable examples. The guide teaches package selection, cache identity, typed steps, classifiers, admission, pipelines, bulk and repair execution, observation, invariants, and troubleshooting.
+
+A test loads the docs directory through Glazed's actual `HelpSystem` and looks up the developer-guide slug, protecting frontmatter parseability and discoverability.
+
+### Prompt Context
+
+**User prompt (verbatim):** (same as Step 4)
+
+**Assistant interpretation:** Make Flowkit approachable to a Go developer through repository documentation and minimal executable programs.
+
+**Inferred user intent:** Ensure the extracted library is usable without reading its implementation or migration ticket first.
+
+**Commit (code):** 83d422c9751dffd81b3eb41021ed58ace23828f3 — "docs: add Flowkit developer guide and examples"
+
+**Commit (code):** 8e4e75b03939afec3236dd37dcf86b9e27815edb — "test: validate Glazed developer guide metadata"
+
+### What I did
+
+- Replaced template README content with Flowkit scope, packages, quick start, compatibility, development commands, and links.
+- Added `docs/flowkit-developer-guide.md` using exact Glazed help-entry fields.
+- Added bounded map, cached step, and typed pipeline example programs.
+- Ran every example and recorded expected behavior.
+- Added a Glazed `HelpSystem` loading test.
+- Removed binary-install/template residue from the Makefile.
+
+### Why
+
+- Examples serve as executable API documentation and downstream compile tests.
+- Glazed frontmatter makes the guide reusable in a help system while remaining readable on GitHub.
+
+### What worked
+
+Example output included:
+
+```text
+[1 4 9 16]
+run 1: values=[2 4 4] hits=0 misses=3 work=2
+run 2: values=[2 4 4] hits=3 misses=0 work=0
+value=6
+value=2
+value=4
+```
+
+The Glazed help loader found slug `flowkit-developer-guide` successfully.
+
+### What didn't work
+
+- N/A.
+
+### What I learned
+
+- The cached example compactly demonstrates three important contracts at once: input-position results, duplicate-key work suppression, and replay hits.
+
+### What was tricky to build
+
+The developer guide had to use Glazed format without implying Flowkit is itself a CLI. The correct deliverable is a parseable help entry plus loader validation, not an artificial command binary solely to host it.
+
+### What warrants a second pair of eyes
+
+- Review examples for idiomatic error and lifecycle handling.
+- Review docs for accidental promises beyond `v0.x` stability.
+
+### What should be done in the future
+
+- Add examples for `Bulk` and `Batched` if real non-RAG consumers request them.
+
+### Code review instructions
+
+- Start with `README.md`, then run all directories under `examples/`.
+- Validate docs with `GOWORK=off go test . -run TestDeveloperGuideLoadsAsGlazedHelpEntry -count=1`.
+
+### Technical details
+
+The guide slug is `flowkit-developer-guide`, section type `GeneralTopic`, and includes required Troubleshooting and See Also sections.
