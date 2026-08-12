@@ -1,3 +1,10 @@
-topics: []
+topics:
+    - slug: architecture
+      description: Software architecture and system boundaries
+    - slug: go
+      description: Go language and tooling
+    - slug: migration
+      description: Code and data migration work
 docTypes: []
 intent: []
+status: []

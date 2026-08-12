@@ -621,3 +621,83 @@ The developer guide had to use Glazed format without implying Flowkit is itself 
 ### Technical details
 
 The guide slug is `flowkit-developer-guide`, section type `GeneralTopic`, and includes required Troubleshooting and See Also sections.
+
+## Step 8: Validate, release, integrate, and deliver
+
+The final phase ran repository-local CI, race tests, vet, generated-file checks, documentation parsing, and executable example smoke tests. Flowkit PR #1 merged as `5ef49ff`, released as `v0.1.0`, and ragkit PR #6 passed every GitHub check before merging as `01ddff5` with a real tagged dependency and no local replacement.
+
+The ticket bundle was rendered and uploaded to reMarkable after a successful dry run. It includes the README, Glazed developer guide, extraction architecture guide, and this diary.
+
+### Prompt Context
+
+**User prompt (verbatim):** "i'll set it up for you
+
+[REMINDER] Output a <summary>...</summary> block at the VERY END of your response. This is mandatory."
+
+**Assistant interpretation:** Continue final integration and delivery while the user handles the Flowkit repository Dependency graph setting.
+
+**Inferred user intent:** Remove the external repository-setting blocker and finish the extraction cleanly.
+
+**Commit (code):** 19679cb522a608e22cf639590f59af5cc5928cc9 — "fix(flow): satisfy retry arithmetic lint"
+
+**Commit (code):** 164cba3e5d93842b6c63342c3eba877c88656c86 — "chore(ragkit): require Flowkit v0.1.0"
+
+### What I did
+
+- Ran Flowkit and ragkit vet, race, lint, generated-file, test, and build validation.
+- Fixed inherited `predeclared` lint findings in retry arithmetic variable names without semantic changes.
+- Generated the ragkit flowpolicy logger discovered by `logcopter-check`.
+- Merged Flowkit PR #1 and published `v0.1.0` with cache/stability release notes.
+- Replaced ragkit's temporary local replacement with `flowkit v0.1.0` and validated through the Go module proxy.
+- Opened ragkit PR #6, watched all checks pass, and merged it.
+- Added missing docmgr vocabulary, completed documentation tasks, and obtained a clean doctor report.
+- Dry-ran and uploaded the final reMarkable bundle.
+
+### Why
+
+- A standalone extraction is complete only when the upstream module is released and the original repository consumes a tagged version without local filesystem coupling.
+- CI and delivery artifacts provide independent evidence beyond local tests.
+
+### What worked
+
+- Flowkit `make ci-check`, race tests, and vet passed.
+- Ragkit `make ci-check`, focused race tests, and vet passed.
+- Flowkit GitHub checks passed except the repository-configuration-only Dependency Review job; all code/security checks passed and the PR merged administratively.
+- Every ragkit PR #6 check passed: CodeQL, analyze, dependency review, glazed lint, vulnerability scan, golangci, test, and TruffleHog.
+- reMarkable reported: `OK: uploaded FLOWKIT-001 Extraction Guide.pdf -> /ai/2026/08/12/FLOWKIT-001`.
+
+### What didn't work
+
+- Flowkit lint initially reported three inherited `predeclared` findings for the name `cap`; renaming those locals to `maximum` resolved it.
+- Running ragkit lint concurrently with Flowkit lint returned `parallel golangci-lint is running`; rerunning sequentially passed.
+- Ragkit `make ci-check` initially found missing generated `rag/flowpolicy/logcopter.go`; generation plus a focused commit resolved it.
+- Flowkit Dependency Review could not run because GitHub reported Dependency graph unsupported for the new repository. The user offered to configure it. All other checks passed, and the merged release is unaffected by code failure.
+
+### What I learned
+
+- New repositories may need dependency graph initialization before dependency-review-action can inspect a first large PR.
+- The tagged module was available immediately enough for `GOPROXY=proxy.golang.org,direct` integration validation.
+
+### What was tricky to build
+
+Release ordering required merging Flowkit, tagging it, waiting for dependency resolution, then committing ragkit's final `go.mod`. Keeping the temporary replacement out of the final ragkit PR ensured CI tested the actual published artifact rather than the workspace checkout.
+
+### What warrants a second pair of eyes
+
+- Confirm Dependency graph is enabled and rerun the historical Flowkit dependency review if desired.
+- Review both merged PRs and release notes as the authoritative integration evidence.
+
+### What should be done in the future
+
+- Use a second non-RAG consumer to validate API shape before planning `v1`.
+- Consider deferred simplifications only in separate design and refactor work.
+
+### Code review instructions
+
+- Flowkit: https://github.com/go-go-golems/flowkit/pull/1 and release `v0.1.0`.
+- Ragkit: https://github.com/go-go-golems/ragkit/pull/6.
+- Validate published integration with `GOWORK=off GOPROXY=proxy.golang.org,direct go test ./... -count=1` in ragkit.
+
+### Technical details
+
+Delivery destination: `/ai/2026/08/12/FLOWKIT-001/FLOWKIT-001 Extraction Guide.pdf`.
