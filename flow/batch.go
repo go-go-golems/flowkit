@@ -52,10 +52,25 @@ func Batched[I, O any](repair Step[I, O], spec BatchSpec[I, O]) Step[I, O] {
 		extraPlans:    policyPlans(repair.Name, repair.Policy),
 		extraPolicies: []policySpec{{step: repair.Name, policy: repair.Policy}},
 	}
-	step.override = func(ctx context.Context, items []I, o Options, onResult func(context.Context, int, O, execution.CacheOutcome) error) ([]Result[O], Report, error) {
-		return runBatched(ctx, repair, spec, name, items, o, onResult)
+	step.override = func(ctx context.Context, current Step[I, O], items []I, o Options, onResult func(context.Context, int, O, execution.CacheOutcome) error) ([]Result[O], Report, error) {
+		currentSpec := spec
+		currentSpec.Name = current.Name
+		currentSpec.Policy = current.Policy
+		return runBatched(ctx, repair, currentSpec, current.Name, items, o, onResult)
 	}
 	return step
+}
+
+type remappedLedger struct {
+	inner   Ledger
+	indexes []int
+}
+
+func (ledger remappedLedger) Event(ctx context.Context, event Event) error {
+	if event.Index >= 0 && event.Index < len(ledger.indexes) {
+		event.Index = ledger.indexes[event.Index]
+	}
+	return ledger.inner.Event(ctx, event)
 }
 
 func runBatched[I, O any](
@@ -155,7 +170,21 @@ func runBatched[I, O any](
 	for position, itemIndex := range missing {
 		repairItems[position] = items[itemIndex]
 	}
-	repaired, repairReport, err := Run(ctx, repair, repairItems, o)
+
+	// The nested repair run operates on a compact slice. Translate every
+	// externally visible index back to its position in the original input.
+	repairForRun := repair
+	if repair.OnResult != nil {
+		repairObserver := repair.OnResult
+		repairForRun.OnResult = func(ctx context.Context, compactIndex int, value O, outcome execution.CacheOutcome) error {
+			return repairObserver(ctx, missing[compactIndex], value, outcome)
+		}
+	}
+	repairOptions := o
+	if o.Ledger != nil {
+		repairOptions.Ledger = remappedLedger{inner: o.Ledger, indexes: missing}
+	}
+	repaired, repairReport, err := Run(ctx, repairForRun, repairItems, repairOptions)
 	report.merge(repairReport)
 	if err != nil {
 		return nil, report, err

@@ -398,7 +398,7 @@ func Run[I, O any](ctx context.Context, s Step[I, O], items []I, o Options) ([]R
 		return nil, Report{}, err
 	}
 	if s.override != nil {
-		return s.override(ctx, items, o, s.OnResult)
+		return s.override(ctx, s, items, o, s.OnResult)
 	}
 
 	inputs := make([]erasedItem, len(items))
