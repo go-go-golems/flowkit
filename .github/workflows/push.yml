@@ -1,0 +1,32 @@
+name: golang-pipeline
+
+on:
+  push:
+    branches:
+      - 'main'
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - run: git fetch --force --tags
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      -
+        name: Verify logcopter package loggers
+        run: make logcopter-check
+      -
+        name: Generate assets
+        run: go generate ./...
+      -
+        name: Verify generated files are up to date
+        run: git diff --exit-code
+      -
+        name: Run unit tests
+        run: go test ./...
