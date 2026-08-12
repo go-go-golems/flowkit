@@ -4,3 +4,13 @@
 
 - Initial workspace created
 
+
+## 2026-08-12
+
+Mapped ragkit flow/execution architecture, support dependency closure, direct consumers, compatibility invariants, and focused test baseline.
+
+### Related Files
+
+- /home/manuel/workspaces/2026-08-12/extract-flowkit/ragkit/execution/cache.go — Cache compatibility contract mapped for extraction
+- /home/manuel/workspaces/2026-08-12/extract-flowkit/ragkit/flow/run.go — Primary orchestration engine mapped for extraction
+
