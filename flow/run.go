@@ -261,37 +261,37 @@ func resourcePlansEqual(left, right execution.ResourcePlan) bool {
 	return *left.UnitUSD == *right.UnitUSD
 }
 
-func retryDelay(delay, cap time.Duration) time.Duration {
-	if cap <= 0 {
+func retryDelay(delay, maximum time.Duration) time.Duration {
+	if maximum <= 0 {
 		return 0
 	}
 	if delay < 0 {
 		delay = 0
 	}
-	if delay > cap {
-		delay = cap
+	if delay > maximum {
+		delay = maximum
 	}
 	jitterLimit := delay / 2
 	// #nosec G404 -- retry timing jitter is not used for a security decision or secret.
 	jitter := time.Duration(rand.Int63n(int64(jitterLimit) + 1))
-	if delay >= cap-jitter {
-		return cap
+	if delay >= maximum-jitter {
+		return maximum
 	}
 	return delay + jitter
 }
 
-func nextRetryDelay(delay, cap time.Duration) time.Duration {
-	if cap <= 0 {
+func nextRetryDelay(delay, maximum time.Duration) time.Duration {
+	if maximum <= 0 {
 		return 0
 	}
-	if delay >= cap {
-		return cap
+	if delay >= maximum {
+		return maximum
 	}
 	if delay <= 0 {
 		return 0
 	}
-	if delay > cap-delay {
-		return cap
+	if delay > maximum-delay {
+		return maximum
 	}
 	return delay * 2
 }

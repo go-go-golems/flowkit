@@ -56,16 +56,16 @@ func transientStringRetry(attempts int) RetrySpec {
 }
 
 func TestRetryArithmeticSaturatesAtCap(t *testing.T) {
-	cap := time.Duration(math.MaxInt64)
-	require.Equal(t, cap, nextRetryDelay(cap-1, cap))
-	require.Equal(t, cap, nextRetryDelay(cap/2+1, cap))
-	require.Equal(t, 2*time.Second, nextRetryDelay(time.Second, cap))
+	maximum := time.Duration(math.MaxInt64)
+	require.Equal(t, maximum, nextRetryDelay(maximum-1, maximum))
+	require.Equal(t, maximum, nextRetryDelay(maximum/2+1, maximum))
+	require.Equal(t, 2*time.Second, nextRetryDelay(time.Second, maximum))
 	require.Equal(t, time.Duration(0), nextRetryDelay(time.Second, 0))
 
 	for range 100 {
-		delay := retryDelay(cap, cap)
+		delay := retryDelay(maximum, maximum)
 		require.GreaterOrEqual(t, delay, time.Duration(0))
-		require.LessOrEqual(t, delay, cap)
+		require.LessOrEqual(t, delay, maximum)
 	}
 }
 
