@@ -9,13 +9,18 @@ Topics:
 DocType: reference
 Intent: long-term
 Owners: []
-RelatedFiles: []
+RelatedFiles:
+    - Path: repo://boundary_test.go
+      Note: Step 4 extraction boundary guard (commit 2042a08)
+    - Path: repo://execution/cache.go
+      Note: Step 4 cache extraction and digest ownership (commit 2042a08)
 ExternalSources: []
-Summary: "Chronological evidence, commands, failures, decisions, and review guidance for the Flowkit extraction analysis."
+Summary: Chronological evidence, commands, failures, decisions, and review guidance for the Flowkit extraction analysis.
 LastUpdated: 2026-08-12T23:18:00-04:00
-WhatFor: "Resume or review the extraction investigation without repeating discovery work."
-WhenToUse: "Before continuing FLOWKIT-001 or reviewing the architecture guide and extraction plan."
+WhatFor: Resume or review the extraction investigation without repeating discovery work.
+WhenToUse: Before continuing FLOWKIT-001 or reviewing the architecture guide and extraction plan.
 ---
+
 
 # Diary
 
@@ -303,3 +308,78 @@ The guide had to be exhaustive without collapsing into a source-code paraphrase.
 Primary deliverable:
 
 `flowkit/ttmp/2026/08/12/FLOWKIT-001--extract-flow-and-execution-from-ragkit/design-doc/01-flowkit-extraction-architecture-and-implementation-guide.md`
+
+## Step 4: Extract the execution layer and establish the module boundary
+
+I replaced the template module boundary with the real Flowkit module and extracted the low-level execution primitives first. This commit also introduces the approved narrow simplifications: only required support helpers moved, and `execution.Key.Digest` is now the single authoritative key fingerprint implementation used by cache paths, outcomes, and Flow callers.
+
+The extraction remains behavior-preserving. Production files and tests moved together, the historical cache schema remains unchanged, and a root boundary test rejects any direct or transitive ragkit dependency.
+
+### Prompt Context
+
+**User prompt (verbatim):** "A queued hidden goal continuation was stale and has been cancelled before running.
+Queued goal id: 4bf6dc57-60bc-4c8a-9832-a574fdd64a0a.
+Current goal id: cb3e094b-821c-4f3a-945f-afdd039a1001; current status: active.
+Ignore only this stale hidden bookkeeping message; do not perform work for the queued goal id above or mention this cancellation to the user."
+
+**Assistant interpretation:** Continue the active extraction objective task by task, preserving the approved simplification boundary.
+
+**Inferred user intent:** Complete the extraction with reviewable commits, exact compatibility, strong documentation, examples, validation, and delivery.
+
+**Commit (code):** 2042a08bbbc317f8cfb72f6e69aabd0c8ca66e53 — "feat(execution): extract execution primitives"
+
+### What I did
+
+- Changed the module path from `github.com/go-go-golems/XXX` to `github.com/go-go-golems/flowkit`.
+- Removed placeholder `cmd/XXX` and `pkg` files.
+- Extracted all `execution` production files and tests.
+- Added minimal private digest, atomic-file, and strict-JSON support packages.
+- Exported `execution.Key.Digest` and updated execution callers to use it.
+- Added `TestPackagesDoNotImportRagkit`.
+- Updated logcopter generation paths and package areas.
+- Ran formatting, dependency tidying, focused tests, and all available Flowkit tests.
+
+### Why
+
+- Moving `execution` first establishes the dependency foundation required by `flow`.
+- Central digest ownership prevents cache fingerprint drift.
+- Minimal private support packages avoid importing or exposing unrelated ragkit utilities.
+
+### What worked
+
+- `GOWORK=off go test ./execution ./flow ./internal/... -count=1` passed while the uncommitted Flow package was present.
+- `GOWORK=off go test ./... -count=1` passed.
+- A source search found no ragkit import in extracted packages; only the boundary test's forbidden-prefix string remained.
+
+### What didn't work
+
+- N/A. The first extraction attempt compiled and passed focused tests.
+
+### What I learned
+
+- The execution package requires only one digest operation, two filesystem operations, and two strict JSON decoding operations from ragkit support code.
+- Exporting `Key.Digest` removes Flow's need to know the key JSON fingerprint algorithm.
+
+### What was tricky to build
+
+The key digest is a persisted compatibility boundary, not merely an internal helper. I preserved validation, JSON marshaling, SHA-256 encoding, and all call sites while changing only method visibility. The copied Flow files were intentionally left uncommitted so execution could remain its own reviewable commit even though both layers were validated together.
+
+### What warrants a second pair of eyes
+
+- Compare `execution/cache.go` against ragkit for schema, JSON tags, path sharding, corruption handling, and atomic publication.
+- Verify the minimal support copies preserve exactly the functions execution uses and expose nothing extra.
+- Inspect `boundary_test.go` for direct and transitive dependency coverage.
+
+### What should be done in the future
+
+- Add explicit pre-extraction cache fixture coverage beyond existing cache tests.
+- Extract and commit Flow against this execution package.
+
+### Code review instructions
+
+- Start with `execution/cache.go` at `Key.Digest`, then inspect `internal/digest/digest.go` and `boundary_test.go`.
+- Validate with `GOWORK=off go test ./execution ./internal/... -count=1`.
+
+### Technical details
+
+The extracted cache retains `rag-ttc-execution-cache/v1`. The module import path changes, but cache keys and envelope bytes do not.
