@@ -83,6 +83,20 @@ func TestBulkBatchesMissesAndCachesPerItem(t *testing.T) {
 	require.Equal(t, 2, report.Step("embed").Misses)
 }
 
+func TestBulkUsesConfigurationAppliedAfterConstruction(t *testing.T) {
+	base := bulkStep("before")
+	step := Bulk(base, doubleAll(nil, nil, nil), 2)
+	step.Name = "after"
+	step.Policy.Workers = 1
+	step.Policy.Admission = []Resource{{Name: "bulk-items", Ceiling: 2, Budget: 2}}
+
+	_, report, err := Run(t.Context(), step, []int{1, 2}, Options{})
+	require.NoError(t, err)
+	require.Empty(t, report.Step("before"))
+	require.Equal(t, 2, report.Step("after").Items)
+	require.Equal(t, execution.BudgetSnapshot{Limit: 2, Spent: 2, Remaining: 0}, report.Step("after").Spend["bulk-items"])
+}
+
 func TestBulkUncachedResultsEmitDone(t *testing.T) {
 	ledger := &recordingLedger{}
 	step := Bulk(bulkStep("uncached"), doubleAll(nil, nil, nil), 2)

@@ -24,8 +24,8 @@ import (
 func Bulk[I, O any](s Step[I, O], doBulk func(context.Context, []I) ([]O, error), batchSize int) Step[I, O] {
 	bulk := s
 	bulk.Do = nil
-	bulk.override = func(ctx context.Context, items []I, o Options, onResult func(context.Context, int, O, execution.CacheOutcome) error) ([]Result[O], Report, error) {
-		return runBulk(ctx, s, doBulk, batchSize, items, o, onResult)
+	bulk.override = func(ctx context.Context, current Step[I, O], items []I, o Options, onResult func(context.Context, int, O, execution.CacheOutcome) error) ([]Result[O], Report, error) {
+		return runBulk(ctx, current, doBulk, batchSize, items, o, onResult)
 	}
 	return bulk
 }

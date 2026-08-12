@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -64,6 +65,64 @@ func splitJSON(raw string, _ []string) (map[int]string, error) {
 		results[position] = value
 	}
 	return results, nil
+}
+
+func TestBatchedUsesConfigurationAppliedAfterConstruction(t *testing.T) {
+	spec := BatchSpec[string, string]{
+		Policy: Policy{Workers: 2},
+		Group:  groupsOf(2),
+		DoAll: func(_ context.Context, group []string) (string, error) {
+			return `{"0":"` + group[0] + `","1":"` + group[1] + `"}`, nil
+		},
+		Split: splitJSON,
+	}
+	step := Batched(chunkStep(nil), spec)
+	step.Name = "configured-groups"
+	step.Policy.Workers = 1
+	step.Policy.Admission = []Resource{{Name: "group-calls", Ceiling: 1, Budget: 1}}
+
+	_, report, err := Run(t.Context(), step, []string{"a", "b"}, Options{})
+	require.NoError(t, err)
+	require.Empty(t, report.Step("chunk-groups"))
+	require.Equal(t, 1, report.Step("configured-groups").WorkCalls)
+	require.Equal(t, execution.BudgetSnapshot{Limit: 1, Spent: 1, Remaining: 0}, report.Step("configured-groups").Spend["group-calls"])
+}
+
+func TestBatchedRepairObserversUseOriginalIndexes(t *testing.T) {
+	var observed []int
+	var observedMutex sync.Mutex
+	repair := chunkStep(nil)
+	repair.OnResult = func(_ context.Context, index int, _ string, _ execution.CacheOutcome) error {
+		observedMutex.Lock()
+		observed = append(observed, index)
+		observedMutex.Unlock()
+		return nil
+	}
+	ledger := &recordingLedger{}
+	spec := BatchSpec[string, string]{
+		Policy: Policy{Workers: 1},
+		Group:  func([]string) [][]int { return [][]int{{0}} },
+		DoAll: func(_ context.Context, group []string) (string, error) {
+			return `{"0":"batched:` + group[0] + `"}`, nil
+		},
+		Split: splitJSON,
+	}
+
+	results, _, err := Run(t.Context(), Batched(repair, spec), []string{"a", "b", "c"}, Options{Ledger: ledger})
+	require.NoError(t, err)
+	require.Equal(t, "repaired:b", results[1].Value)
+	require.Equal(t, "repaired:c", results[2].Value)
+	observedMutex.Lock()
+	require.ElementsMatch(t, []int{1, 2}, observed)
+	observedMutex.Unlock()
+
+	var repairIndexes []int
+	for _, event := range ledger.byType(EventDone) {
+		if event.Step == "chunk" {
+			repairIndexes = append(repairIndexes, event.Index)
+		}
+	}
+	require.ElementsMatch(t, []int{1, 2}, repairIndexes)
 }
 
 func TestBatchedHappyPathUsesOnlyGroupCalls(t *testing.T) {
