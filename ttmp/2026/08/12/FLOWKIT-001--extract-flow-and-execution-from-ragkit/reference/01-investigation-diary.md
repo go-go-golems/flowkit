@@ -317,12 +317,17 @@ The extraction remains behavior-preserving. Production files and tests moved tog
 
 ### Prompt Context
 
-**User prompt (verbatim):** "A queued hidden goal continuation was stale and has been cancelled before running.
-Queued goal id: 4bf6dc57-60bc-4c8a-9832-a574fdd64a0a.
-Current goal id: cb3e094b-821c-4f3a-945f-afdd039a1001; current status: active.
-Ignore only this stale hidden bookkeeping message; do not perform work for the queued goal id above or mention this cancellation to the user."
+**User prompt (verbatim):** "ok, cool, lets keep 1-4 and defer all the rest. 
 
-**Assistant interpretation:** Continue the active extraction objective task by task, preserving the approved simplification boundary.
+Work on the xtraction task by task, commit at appropriate intervals, keep a detailed diary as you work. 
+
+Also write a great developer guide (use glazed help entry format) and a README for flow, and a couple of example programs in examples/ 
+
+Budget 1M
+
+[REMINDER] Output a <summary>...</summary> block at the VERY END of your response. This is mandatory."
+
+**Assistant interpretation:** Continue the extraction task by task, preserve only the four approved extraction-safe simplifications, and produce reviewable code, diary, developer documentation, README, and examples.
 
 **Inferred user intent:** Complete the extraction with reviewable commits, exact compatibility, strong documentation, examples, validation, and delivery.
 
