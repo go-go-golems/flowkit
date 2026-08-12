@@ -36,3 +36,18 @@ Steps 5-7: extracted Flow, separated ragkit classifier policy, locked cache comp
 - /home/manuel/workspaces/2026-08-12/extract-flowkit/flowkit/flow/classify.go — Generic classifier boundary
 - /home/manuel/workspaces/2026-08-12/extract-flowkit/ragkit/rag/flowpolicy/classifier.go — Ragkit historical classifier policy
 
+
+## 2026-08-12
+
+Step 8: passed local and GitHub validation, released Flowkit v0.1.0, merged ragkit integration PR #6, and uploaded the final reMarkable bundle.
+
+### Related Files
+
+- /home/manuel/workspaces/2026-08-12/extract-flowkit/flowkit/README.md — Included in released and uploaded documentation
+- /home/manuel/workspaces/2026-08-12/extract-flowkit/flowkit/docs/flowkit-developer-guide.md — Included in released and uploaded documentation
+
+
+## 2026-08-12
+
+Ticket closed
+
