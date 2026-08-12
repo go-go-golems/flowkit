@@ -1,7 +1,7 @@
 ---
 Title: Extract flow and execution from ragkit
 Ticket: FLOWKIT-001
-Status: active
+Status: complete
 Topics:
     - architecture
     - migration
@@ -12,10 +12,11 @@ Owners: []
 RelatedFiles: []
 ExternalSources: []
 Summary: ""
-LastUpdated: 2026-08-12T18:58:06.884680724-04:00
+LastUpdated: 2026-08-12T19:31:46.926358996-04:00
 WhatFor: ""
 WhenToUse: ""
 ---
+
 
 # Extract flow and execution from ragkit
 
