@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -13,6 +14,19 @@ import (
 	"github.com/go-go-golems/flowkit/internal/jsonutil"
 	_ "github.com/go-sql-driver/mysql"
 )
+
+// mysqlMediumTextMax is the byte capacity of a MEDIUMTEXT column (2^24 - 1).
+// MaxEntryBytes is capped at this so an envelope that passes the
+// application-side size check can always be stored.
+const mysqlMediumTextMax = 1<<24 - 1
+
+// mysqlIdentifier matches a safe unquoted MySQL/MariaDB identifier: ASCII
+// letters, digits, dollar, underscore, starting with a letter or underscore,
+// length 1-64. Rejecting anything else here means the table name is never raw
+// SQL interpolation of untrusted input: a configured name like "flow-cache"
+// or an injection attempt fails fast at construction instead of producing a
+// syntax error or a multi-statement hazard.
+var mysqlIdentifier = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_$]{0,63}$`)
 
 // MySQLCacheOptions configures a MySQL-backed execution.Cache.
 //
@@ -59,12 +73,18 @@ func NewMySQLCache(ctx context.Context, opts MySQLCacheOptions) (*MySQLCache, er
 	if table == "" {
 		table = "cache_entries"
 	}
+	if !mysqlIdentifier.MatchString(table) {
+		return nil, fmt.Errorf("mysql cache table name %q is not a valid unquoted MySQL identifier (letters, digits, underscore, $; 1-64 chars)", table)
+	}
 	maxEntryBytes := opts.MaxEntryBytes
 	if maxEntryBytes == 0 {
-		maxEntryBytes = 16 << 20
+		maxEntryBytes = mysqlMediumTextMax
 	}
 	if maxEntryBytes < 1 {
 		return nil, fmt.Errorf("mysql cache maximum entry bytes must be positive")
+	}
+	if maxEntryBytes > mysqlMediumTextMax {
+		return nil, fmt.Errorf("mysql cache maximum entry bytes %d exceeds MEDIUMTEXT capacity %d; use a smaller MaxEntryBytes or a column type that can hold it", maxEntryBytes, mysqlMediumTextMax)
 	}
 
 	db, err := openMySQLPool(opts.DSN, opts.MaxOpenConns, opts.MaxIdleConns, opts.ConnMaxLifetime, opts.ConnMaxIdleTime)
@@ -98,8 +118,8 @@ func (c *MySQLCache) migrate(ctx context.Context) error {
 	const stmt = `
 CREATE TABLE IF NOT EXISTS %s (
   key_digest    CHAR(64) NOT NULL PRIMARY KEY,
-  step          VARCHAR(64) NOT NULL,
-  version       VARCHAR(64) NOT NULL,
+  step          VARCHAR(255) NOT NULL,
+  version       VARCHAR(255) NOT NULL,
   input_digest  CHAR(64) NOT NULL,
   value_digest  CHAR(64) NOT NULL,
   value_json    MEDIUMTEXT NOT NULL,
@@ -137,6 +157,12 @@ func (c *MySQLCache) Load(ctx context.Context, key Key, target any) (bool, error
 	}
 	if err != nil {
 		return false, fmt.Errorf("read mysql cache entry: %w", err)
+	}
+	// Mirror FileCache.Load's oversized-entry check: an entry written by an
+	// instance with a larger limit (or inserted outside this cache) is corrupt
+	// from this cache's perspective, not a silent oversized return.
+	if int64(len(raw)) > c.maxEntryBytes {
+		return false, fmt.Errorf("%w: entry exceeds maximum size", ErrCorruptCache)
 	}
 	envelope, err := jsonutil.DecodeStrict[cacheEnvelope](raw)
 	if err != nil {

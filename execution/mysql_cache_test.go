@@ -2,10 +2,14 @@ package execution
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -221,3 +225,129 @@ func keyDigestOrFatal(t *testing.T, key Key) string {
 
 // Ensure the test helper imports stay referenced.
 var _ = filepath.Separator
+
+// TestNewMySQLCacheRejectsInvalidTableName verifies the table identifier is
+// validated before any SQL is built, so a configured name like "flow-cache" or
+// an injection attempt fails fast instead of producing a syntax error or a
+// multi-statement hazard.
+func TestNewMySQLCacheRejectsInvalidTableName(t *testing.T) {
+	t.Parallel()
+	for _, bad := range []string{"flow-cache", "foo; DROP TABLE x;--", "has space", "9starts-digit"} {
+		_, err := NewMySQLCache(context.Background(), MySQLCacheOptions{
+			DSN:       mysqlTestDSN(t),
+			TableName: bad,
+		})
+		require.Error(t, err, "table %q should be rejected", bad)
+		require.ErrorContains(t, err, "valid unquoted MySQL identifier")
+	}
+}
+
+// TestNewMySQLCacheAcceptsValidTableName accepts the default and a couple of
+// legal identifiers to guard against an over-strict regex.
+func TestNewMySQLCacheAcceptsValidTableName(t *testing.T) {
+	t.Parallel()
+	for _, good := range []string{"cache_entries", "Cache1", "with_underscore", "dollar$"} {
+		cache, err := NewMySQLCache(context.Background(), MySQLCacheOptions{
+			DSN:       mysqlTestDSN(t),
+			TableName: good,
+		})
+		require.NoError(t, err, "table %q should be accepted", good)
+		t.Cleanup(func() { _ = cache.Close() })
+	}
+}
+
+// TestNewMySQLCacheCapsMaxEntryBytes verifies that a MaxEntryBytes larger than
+// MEDIUMTEXT capacity is rejected, and the default equals that capacity (not
+// 16<<20, which is one byte over MEDIUMTEXT and would admit an unstorable size).
+func TestNewMySQLCacheCapsMaxEntryBytes(t *testing.T) {
+	t.Parallel()
+	_, err := NewMySQLCache(context.Background(), MySQLCacheOptions{
+		DSN:           mysqlTestDSN(t),
+		TableName:     uniqueCacheTable(t),
+		MaxEntryBytes: mysqlMediumTextMax + 1,
+	})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "exceeds MEDIUMTEXT capacity")
+
+	cache, err := NewMySQLCache(context.Background(), MySQLCacheOptions{
+		DSN:       mysqlTestDSN(t),
+		TableName: uniqueCacheTable(t) + "_default",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = cache.Close() })
+	require.Equal(t, int64(mysqlMediumTextMax), cache.maxEntryBytes)
+}
+
+// TestMySQLCacheLoadRejectsOversizedRow mirrors FileCache.Load's behavior: an
+// existing row larger than the configured MaxEntryBytes is ErrCorruptCache,
+// not a silent oversized return. The row is inserted directly (bypassing the
+// Store size check) to simulate a larger-limit instance or an out-of-band insert.
+func TestMySQLCacheLoadRejectsOversizedRow(t *testing.T) {
+	t.Parallel()
+	dsn := mysqlTestDSN(t)
+	table := uniqueCacheTable(t)
+	cache, err := NewMySQLCache(context.Background(), MySQLCacheOptions{
+		DSN:           dsn,
+		TableName:     table,
+		MaxEntryBytes: 64,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = cache.db.ExecContext(context.Background(), fmt.Sprintf("DELETE FROM %s", table))
+		_ = cache.Close()
+	})
+	// Start clean so a re-run against the persistent shared DB does not collide
+	// with a leftover row (this test does a raw INSERT without ON DUPLICATE KEY).
+	_, _ = cache.db.ExecContext(context.Background(), fmt.Sprintf("DELETE FROM %s", table))
+
+	key, err := NewKey("embed", "v1", "big-doc")
+	require.NoError(t, err)
+	// Build a valid envelope (so it would pass validation) but larger than 64 bytes.
+	valueData, err := json.Marshal(cachedFixture{ID: "big-doc", Values: []float32{1, 2, 3, 4, 5, 6, 7, 8}})
+	require.NoError(t, err)
+	envelope := cacheEnvelope{
+		SchemaVersion: cacheEntrySchema,
+		Key:           key,
+		ValueDigest:   digestOf(valueData),
+		Value:         valueData,
+	}
+	data, err := json.Marshal(envelope)
+	require.NoError(t, err)
+	require.Greater(t, len(data), 64, "fixture envelope must exceed the small limit")
+	keyDigest, err := key.Digest()
+	require.NoError(t, err)
+	_, err = cache.db.ExecContext(context.Background(),
+		fmt.Sprintf("INSERT INTO %s (key_digest, step, version, input_digest, value_digest, value_json, created_at) VALUES (?,?,?,?,?,?,?)", table),
+		keyDigest, key.Step, key.Version, key.InputDigest, envelope.ValueDigest, data, time.Now().UnixMilli())
+	require.NoError(t, err)
+
+	var got cachedFixture
+	_, err = cache.Load(context.Background(), key, &got)
+	require.ErrorIs(t, err, ErrCorruptCache)
+}
+
+// TestMySQLCacheSupportsLongStepAndVersion verifies that a valid Key whose Step
+// or Version exceeds 64 chars (allowed by NewKey/validate and by FileCache) is
+// stored and loaded through MySQLCache without a data-too-long error.
+func TestMySQLCacheSupportsLongStepAndVersion(t *testing.T) {
+	t.Parallel()
+	cache := newTestMySQLCache(t)
+	longStep := strings.Repeat("a", 200)
+	longVersion := "v" + strings.Repeat("b", 200)
+	key, err := NewKey(longStep, longVersion, "long-key-doc")
+	require.NoError(t, err)
+	want := cachedFixture{ID: "long-key-doc", Values: []float32{9}}
+	require.NoError(t, cache.Store(context.Background(), key, want))
+	var got cachedFixture
+	found, err := cache.Load(context.Background(), key, &got)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, want, got)
+}
+
+// digestOf builds a lowercase hex SHA-256 so the oversized-row test can
+// construct a valid envelope without importing the internal digest package.
+func digestOf(data []byte) string {
+	h := sha256.Sum256(data)
+	return hex.EncodeToString(h[:])
+}
