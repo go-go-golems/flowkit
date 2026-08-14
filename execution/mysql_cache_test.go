@@ -47,12 +47,19 @@ func sanitizeForTable(name string) string {
 
 func newTestMySQLCache(t *testing.T) *MySQLCache {
 	t.Helper()
+	table := uniqueCacheTable(t)
 	cache, err := NewMySQLCache(context.Background(), MySQLCacheOptions{
 		DSN:       mysqlTestDSN(t),
-		TableName: uniqueCacheTable(t),
+		TableName: table,
 	})
 	require.NoError(t, err, "NewMySQLCache")
-	t.Cleanup(func() { _ = cache.Close() })
+	// Start from a clean table so re-running against the persistent shared DB
+	// (table names are stable per test) does not collide with leftover rows.
+	_, _ = cache.db.ExecContext(context.Background(), fmt.Sprintf("DELETE FROM %s", table))
+	t.Cleanup(func() {
+		_, _ = cache.db.ExecContext(context.Background(), fmt.Sprintf("DELETE FROM %s", table))
+		_ = cache.Close()
+	})
 	return cache
 }
 
@@ -187,6 +194,9 @@ func TestMySQLCacheCompatibleWithFileCacheEnvelope(t *testing.T) {
 	mysqlCache, err := NewMySQLCache(context.Background(), MySQLCacheOptions{DSN: dsn, TableName: table})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = mysqlCache.Close() })
+	// Start clean so a re-run against the persistent shared DB does not collide
+	// with a leftover row (this test does a raw INSERT without ON DUPLICATE KEY).
+	_, _ = mysqlCache.db.ExecContext(context.Background(), fmt.Sprintf("DELETE FROM %s", table))
 	keyDigest, err := key.Digest()
 	require.NoError(t, err)
 	_, err = mysqlCache.db.ExecContext(context.Background(),
