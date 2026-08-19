@@ -2,7 +2,9 @@ package execution
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,14 +20,15 @@ import (
 // mysqlMediumTextMax is the byte capacity of a MEDIUMTEXT column (2^24 - 1).
 // MaxEntryBytes is capped at this so an envelope that passes the
 // application-side size check can always be stored.
-const mysqlMediumTextMax = 1<<24 - 1
+const (
+	mysqlMediumTextMax    = 1<<24 - 1
+	mysqlCacheSchemaV1    = int64(1)
+	mysqlSchemaVersionTbl = "flowkit_schema_version"
+)
 
-// mysqlIdentifier matches a safe unquoted MySQL/MariaDB identifier: ASCII
-// letters, digits, dollar, underscore, starting with a letter or underscore,
-// length 1-64. Rejecting anything else here means the table name is never raw
-// SQL interpolation of untrusted input: a configured name like "flow-cache"
-// or an injection attempt fails fast at construction instead of producing a
-// syntax error or a multi-statement hazard.
+// mysqlIdentifier restricts configurable identifiers before they are quoted.
+// Quoting remains mandatory because syntactically valid identifiers can also
+// be MySQL reserved words such as "select".
 var mysqlIdentifier = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_$]{0,63}$`)
 
 // MySQLCacheOptions configures a MySQL-backed execution.Cache.
@@ -74,7 +77,7 @@ func NewMySQLCache(ctx context.Context, opts MySQLCacheOptions) (*MySQLCache, er
 		table = "cache_entries"
 	}
 	if !mysqlIdentifier.MatchString(table) {
-		return nil, fmt.Errorf("mysql cache table name %q is not a valid unquoted MySQL identifier (letters, digits, underscore, $; 1-64 chars)", table)
+		return nil, fmt.Errorf("mysql cache table name %q is not a valid MySQL identifier (letters, digits, underscore, $; 1-64 chars)", table)
 	}
 	maxEntryBytes := opts.MaxEntryBytes
 	if maxEntryBytes == 0 {
@@ -111,25 +114,109 @@ func (c *MySQLCache) migrate(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	// value_json holds the full envelope FileCache writes to disk; MEDIUMTEXT
-	// matches the 16 MiB default maximum entry size. key_digest is Key.Digest()
-	// (64-char hex SHA-256) and is the content-addressed primary key, so the
-	// ON DUPLICATE KEY UPDATE in Store is an idempotent no-op for repeat writes.
-	const stmt = `
-CREATE TABLE IF NOT EXISTS %s (
-  key_digest    CHAR(64) NOT NULL PRIMARY KEY,
-  step          VARCHAR(255) NOT NULL,
-  version       VARCHAR(255) NOT NULL,
-  input_digest  CHAR(64) NOT NULL,
-  value_digest  CHAR(64) NOT NULL,
-  value_json    MEDIUMTEXT NOT NULL,
-  created_at    BIGINT NOT NULL,
-  KEY idx_step_version (step, version)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;`
-	if _, err := c.db.ExecContext(ctx, fmt.Sprintf(stmt, c.table)); err != nil {
+	conn, err := c.db.Conn(ctx)
+	if err != nil {
 		return err
 	}
+	defer func() { _ = conn.Close() }()
+
+	var database string
+	if err := conn.QueryRowContext(ctx, "SELECT DATABASE()").Scan(&database); err != nil {
+		return fmt.Errorf("read selected database: %w", err)
+	}
+	lockName := mysqlCacheMigrationLock(database)
+	var acquired sql.NullInt64
+	if err := conn.QueryRowContext(ctx, "SELECT GET_LOCK(?, 30)", lockName).Scan(&acquired); err != nil {
+		return fmt.Errorf("acquire schema lock: %w", err)
+	}
+	if !acquired.Valid || acquired.Int64 != 1 {
+		return fmt.Errorf("acquire schema lock %q: timed out", lockName)
+	}
+	defer func() {
+		var released sql.NullInt64
+		_ = conn.QueryRowContext(context.Background(), "SELECT RELEASE_LOCK(?)", lockName).Scan(&released)
+	}()
+
+	versionTableExists, err := mysqlTableExists(ctx, conn, mysqlSchemaVersionTbl)
+	if err != nil {
+		return fmt.Errorf("inspect schema version table: %w", err)
+	}
+	cacheTableExists, err := mysqlTableExists(ctx, conn, c.table)
+	if err != nil {
+		return fmt.Errorf("inspect cache table: %w", err)
+	}
+	if !versionTableExists {
+		if cacheTableExists {
+			return fmt.Errorf("mysql cache: unversioned prototype table %q detected; recreate it or migrate it explicitly", c.table)
+		}
+		if _, err := conn.ExecContext(ctx, `CREATE TABLE flowkit_schema_version (
+  component VARBINARY(128) NOT NULL PRIMARY KEY,
+  schema_version BIGINT NOT NULL
+) ENGINE=InnoDB`); err != nil {
+			return fmt.Errorf("create schema version table: %w", err)
+		}
+	}
+
+	component := mysqlCacheSchemaComponent(c.table)
+	var version int64
+	err = conn.QueryRowContext(ctx,
+		"SELECT schema_version FROM flowkit_schema_version WHERE component = ?", component,
+	).Scan(&version)
+	if errors.Is(err, sql.ErrNoRows) {
+		if cacheTableExists {
+			return fmt.Errorf("mysql cache: schema version component %q is missing for existing table %q", component, c.table)
+		}
+		if _, err := conn.ExecContext(ctx, fmt.Sprintf(`CREATE TABLE %s (
+  key_digest    VARBINARY(64) NOT NULL PRIMARY KEY,
+  step          MEDIUMTEXT NOT NULL,
+  version       MEDIUMTEXT NOT NULL,
+  input_digest  VARBINARY(64) NOT NULL,
+  value_digest  VARBINARY(64) NOT NULL,
+  value_json    MEDIUMTEXT NOT NULL,
+  created_at    BIGINT NOT NULL
+) ENGINE=InnoDB`, quoteMySQLIdentifier(c.table))); err != nil {
+			return fmt.Errorf("create cache table: %w", err)
+		}
+		if _, err := conn.ExecContext(ctx,
+			"INSERT INTO flowkit_schema_version(component, schema_version) VALUES(?, ?)",
+			component, mysqlCacheSchemaV1,
+		); err != nil {
+			return fmt.Errorf("record cache schema version: %w", err)
+		}
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read cache schema version: %w", err)
+	}
+	if version != mysqlCacheSchemaV1 {
+		return fmt.Errorf("mysql cache: unsupported schema version %d for %q (want %d)", version, component, mysqlCacheSchemaV1)
+	}
+	if !cacheTableExists {
+		return fmt.Errorf("mysql cache: schema version %d is recorded but table %q is missing", version, c.table)
+	}
 	return nil
+}
+
+func mysqlTableExists(ctx context.Context, q interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, table string) (bool, error) {
+	var count int
+	err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM information_schema.tables
+WHERE table_schema = DATABASE() AND table_name = ?`, table).Scan(&count)
+	return count > 0, err
+}
+
+func mysqlCacheSchemaComponent(table string) string {
+	return "execution.cache." + table
+}
+
+func mysqlCacheMigrationLock(database string) string {
+	sum := sha256.Sum256([]byte(database))
+	return "flowkit.cache." + hex.EncodeToString(sum[:])[:48]
+}
+
+func quoteMySQLIdentifier(identifier string) string {
+	return "`" + strings.ReplaceAll(identifier, "`", "``") + "`"
 }
 
 // Load validates the schema, full key, value digest, and result JSON exactly
@@ -151,7 +238,7 @@ func (c *MySQLCache) Load(ctx context.Context, key Key, target any) (bool, error
 	}
 	var raw []byte
 	err = c.db.QueryRowContext(ctx,
-		fmt.Sprintf("SELECT value_json FROM %s WHERE key_digest = ?", c.table), keyDigest).Scan(&raw)
+		fmt.Sprintf("SELECT value_json FROM %s WHERE key_digest = ?", quoteMySQLIdentifier(c.table)), keyDigest).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
@@ -221,7 +308,7 @@ ON DUPLICATE KEY UPDATE
   value_digest = VALUES(value_digest),
   value_json   = VALUES(value_json),
   created_at   = VALUES(created_at)`,
-		c.table),
+		quoteMySQLIdentifier(c.table)),
 		keyDigest, key.Step, key.Version, key.InputDigest, envelope.ValueDigest, data, time.Now().UnixMilli())
 	if err != nil {
 		return fmt.Errorf("publish mysql cache entry: %w", err)

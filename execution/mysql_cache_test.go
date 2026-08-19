@@ -3,6 +3,7 @@ package execution
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -10,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -33,7 +35,12 @@ func mysqlTestDSN(t *testing.T) string {
 // collide on the shared cache_entries table.
 func uniqueCacheTable(t *testing.T) string {
 	t.Helper()
-	return fmt.Sprintf("cache_test_%s", sanitizeForTable(t.Name()))
+	name := sanitizeForTable(t.Name())
+	sum := sha256.Sum256([]byte(t.Name()))
+	if len(name) > 40 {
+		name = name[:40]
+	}
+	return fmt.Sprintf("cache_test_%s_%s", name, hex.EncodeToString(sum[:])[:8])
 }
 
 func sanitizeForTable(name string) string {
@@ -57,11 +64,9 @@ func newTestMySQLCache(t *testing.T) *MySQLCache {
 		TableName: table,
 	})
 	require.NoError(t, err, "NewMySQLCache")
-	// Start from a clean table so re-running against the persistent shared DB
-	// (table names are stable per test) does not collide with leftover rows.
-	_, _ = cache.db.ExecContext(context.Background(), fmt.Sprintf("DELETE FROM %s", table))
 	t.Cleanup(func() {
-		_, _ = cache.db.ExecContext(context.Background(), fmt.Sprintf("DELETE FROM %s", table))
+		_, _ = cache.db.ExecContext(context.Background(), "DELETE FROM flowkit_schema_version WHERE component = ?", mysqlCacheSchemaComponent(table))
+		_, _ = cache.db.ExecContext(context.Background(), "DROP TABLE IF EXISTS "+quoteMySQLIdentifier(table))
 		_ = cache.Close()
 	})
 	return cache
@@ -120,9 +125,20 @@ func TestMySQLCacheStoreIsIdempotent(t *testing.T) {
 	key, err := NewKey("embed", "v1", "doc-1")
 	require.NoError(t, err)
 	want := cachedFixture{ID: "doc-1", Values: []float32{1, 2, 3}}
-	// Concurrent Store of the same content-addressed key must be idempotent.
+	// Concurrent Store of the same content-addressed key must publish one row.
+	var wg sync.WaitGroup
+	errs := make(chan error, 5)
 	for i := 0; i < 5; i++ {
-		require.NoError(t, cache.Store(context.Background(), key, want))
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs <- cache.Store(context.Background(), key, want)
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
 	}
 	var got cachedFixture
 	found, err := cache.Load(context.Background(), key, &got)
@@ -168,7 +184,11 @@ func TestMySQLCacheSurvivesRestart(t *testing.T) {
 
 	second, err := NewMySQLCache(context.Background(), MySQLCacheOptions{DSN: dsn, TableName: table})
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = second.Close() })
+	t.Cleanup(func() {
+		_, _ = second.db.ExecContext(context.Background(), "DELETE FROM flowkit_schema_version WHERE component = ?", mysqlCacheSchemaComponent(table))
+		_, _ = second.db.ExecContext(context.Background(), "DROP TABLE IF EXISTS "+quoteMySQLIdentifier(table))
+		_ = second.Close()
+	})
 	var got cachedFixture
 	found, err := second.Load(context.Background(), key, &got)
 	require.NoError(t, err)
@@ -238,7 +258,7 @@ func TestNewMySQLCacheRejectsInvalidTableName(t *testing.T) {
 			TableName: bad,
 		})
 		require.Error(t, err, "table %q should be rejected", bad)
-		require.ErrorContains(t, err, "valid unquoted MySQL identifier")
+		require.ErrorContains(t, err, "valid MySQL identifier")
 	}
 }
 
@@ -246,13 +266,17 @@ func TestNewMySQLCacheRejectsInvalidTableName(t *testing.T) {
 // legal identifiers to guard against an over-strict regex.
 func TestNewMySQLCacheAcceptsValidTableName(t *testing.T) {
 	t.Parallel()
-	for _, good := range []string{"cache_entries", "Cache1", "with_underscore", "dollar$"} {
+	for _, good := range []string{"cache_entries", "Cache1", "with_underscore", "dollar$", "select"} {
 		cache, err := NewMySQLCache(context.Background(), MySQLCacheOptions{
 			DSN:       mysqlTestDSN(t),
 			TableName: good,
 		})
 		require.NoError(t, err, "table %q should be accepted", good)
-		t.Cleanup(func() { _ = cache.Close() })
+		t.Cleanup(func() {
+			_, _ = cache.db.ExecContext(context.Background(), "DELETE FROM flowkit_schema_version WHERE component = ?", mysqlCacheSchemaComponent(good))
+			_, _ = cache.db.ExecContext(context.Background(), "DROP TABLE IF EXISTS "+quoteMySQLIdentifier(good))
+			_ = cache.Close()
+		})
 	}
 }
 
@@ -332,8 +356,8 @@ func TestMySQLCacheLoadRejectsOversizedRow(t *testing.T) {
 func TestMySQLCacheSupportsLongStepAndVersion(t *testing.T) {
 	t.Parallel()
 	cache := newTestMySQLCache(t)
-	longStep := strings.Repeat("a", 200)
-	longVersion := "v" + strings.Repeat("b", 200)
+	longStep := strings.Repeat("a", 1024)
+	longVersion := "v" + strings.Repeat("b", 1024)
 	key, err := NewKey(longStep, longVersion, "long-key-doc")
 	require.NoError(t, err)
 	want := cachedFixture{ID: "long-key-doc", Values: []float32{9}}
@@ -343,6 +367,57 @@ func TestMySQLCacheSupportsLongStepAndVersion(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, found)
 	require.Equal(t, want, got)
+}
+
+func TestMySQLCacheSchemaUsesExactIdentityAndUnboundedMetadata(t *testing.T) {
+	t.Parallel()
+	cache := newTestMySQLCache(t)
+
+	want := map[string]string{
+		"key_digest":   "varbinary",
+		"step":         "mediumtext",
+		"version":      "mediumtext",
+		"input_digest": "varbinary",
+		"value_digest": "varbinary",
+	}
+	rows, err := cache.db.QueryContext(context.Background(), `SELECT column_name, data_type
+FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ?`, cache.table)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, rows.Close()) }()
+	for rows.Next() {
+		var column, dataType string
+		require.NoError(t, rows.Scan(&column, &dataType))
+		if expected, ok := want[column]; ok {
+			require.Equal(t, expected, dataType, "column %s", column)
+			delete(want, column)
+		}
+	}
+	require.NoError(t, rows.Err())
+	require.Empty(t, want, "expected identity and metadata columns were not inspected")
+}
+
+func TestNewMySQLCacheRejectsUnversionedPrototype(t *testing.T) {
+	t.Parallel()
+	dsn := mysqlTestDSN(t)
+	table := uniqueCacheTable(t)
+	db, err := sql.Open("mysql", dsn)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(), "DROP TABLE IF EXISTS "+quoteMySQLIdentifier(table))
+		_ = db.Close()
+	})
+	_, err = db.ExecContext(context.Background(), "CREATE TABLE "+quoteMySQLIdentifier(table)+" (key_digest VARBINARY(64) PRIMARY KEY) ENGINE=InnoDB")
+	require.NoError(t, err)
+
+	cache, err := NewMySQLCache(context.Background(), MySQLCacheOptions{DSN: dsn, TableName: table})
+	if cache != nil {
+		_ = cache.Close()
+	}
+	require.Error(t, err)
+	require.True(t,
+		strings.Contains(err.Error(), "unversioned prototype") || strings.Contains(err.Error(), "schema version component"),
+		"unexpected schema-gate error: %v", err,
+	)
 }
 
 // digestOf builds a lowercase hex SHA-256 so the oversized-row test can
