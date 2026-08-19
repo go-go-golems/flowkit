@@ -166,27 +166,35 @@ func (c *MySQLCache) migrate(ctx context.Context) error {
 		if cacheTableExists {
 			return fmt.Errorf("mysql cache: schema version component %q is missing for existing table %q", component, c.table)
 		}
-		if _, err := conn.ExecContext(ctx, fmt.Sprintf(`CREATE TABLE %s (
-  key_digest    VARBINARY(64) NOT NULL PRIMARY KEY,
-  step          MEDIUMTEXT NOT NULL,
-  version       MEDIUMTEXT NOT NULL,
-  input_digest  VARBINARY(64) NOT NULL,
-  value_digest  VARBINARY(64) NOT NULL,
-  value_json    MEDIUMTEXT NOT NULL,
-  created_at    BIGINT NOT NULL
-) ENGINE=InnoDB`, quoteMySQLIdentifier(c.table))); err != nil {
-			return fmt.Errorf("create cache table: %w", err)
+		// Version 0 is a durable initialization marker. MySQL DDL commits
+		// implicitly, so recording the marker before CREATE makes interruption
+		// before or after CREATE recoverable on the next constructor call.
+		if _, err := conn.ExecContext(ctx,
+			"INSERT INTO flowkit_schema_version(component, schema_version) VALUES(?, 0)", component,
+		); err != nil {
+			return fmt.Errorf("record cache schema initialization: %w", err)
+		}
+		version = 0
+	} else if err != nil {
+		return fmt.Errorf("read cache schema version: %w", err)
+	}
+
+	if version == 0 {
+		if !cacheTableExists {
+			if err := createMySQLCacheSchemaV1(ctx, conn, c.table); err != nil {
+				return err
+			}
+		}
+		if err := validateMySQLCacheSchemaV1(ctx, conn, c.table); err != nil {
+			return err
 		}
 		if _, err := conn.ExecContext(ctx,
-			"INSERT INTO flowkit_schema_version(component, schema_version) VALUES(?, ?)",
-			component, mysqlCacheSchemaV1,
+			"UPDATE flowkit_schema_version SET schema_version = ? WHERE component = ? AND schema_version = 0",
+			mysqlCacheSchemaV1, component,
 		); err != nil {
-			return fmt.Errorf("record cache schema version: %w", err)
+			return fmt.Errorf("finalize cache schema version: %w", err)
 		}
 		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("read cache schema version: %w", err)
 	}
 	if version != mysqlCacheSchemaV1 {
 		return fmt.Errorf("mysql cache: unsupported schema version %d for %q (want %d)", version, component, mysqlCacheSchemaV1)
@@ -194,7 +202,7 @@ func (c *MySQLCache) migrate(ctx context.Context) error {
 	if !cacheTableExists {
 		return fmt.Errorf("mysql cache: schema version %d is recorded but table %q is missing", version, c.table)
 	}
-	return nil
+	return validateMySQLCacheSchemaV1(ctx, conn, c.table)
 }
 
 func mysqlTableExists(ctx context.Context, q interface {
@@ -202,8 +210,77 @@ func mysqlTableExists(ctx context.Context, q interface {
 }, table string) (bool, error) {
 	var count int
 	err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM information_schema.tables
-WHERE table_schema = DATABASE() AND table_name = ?`, table).Scan(&count)
+WHERE table_schema = DATABASE() AND BINARY table_name = BINARY ?`, table).Scan(&count)
 	return count > 0, err
+}
+
+func createMySQLCacheSchemaV1(ctx context.Context, q interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}, table string) error {
+	if _, err := q.ExecContext(ctx, fmt.Sprintf(`CREATE TABLE %s (
+  key_digest    VARBINARY(64) NOT NULL PRIMARY KEY,
+  step          MEDIUMTEXT NOT NULL,
+  version       MEDIUMTEXT NOT NULL,
+  input_digest  VARBINARY(64) NOT NULL,
+  value_digest  VARBINARY(64) NOT NULL,
+  value_json    MEDIUMTEXT NOT NULL,
+  created_at    BIGINT NOT NULL
+) ENGINE=InnoDB`, quoteMySQLIdentifier(table))); err != nil {
+		return fmt.Errorf("create cache table: %w", err)
+	}
+	return nil
+}
+
+func validateMySQLCacheSchemaV1(ctx context.Context, q interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, table string) error {
+	expected := map[string]string{
+		"key_digest":   "varbinary:NO:64",
+		"step":         "mediumtext:NO:16777215",
+		"version":      "mediumtext:NO:16777215",
+		"input_digest": "varbinary:NO:64",
+		"value_digest": "varbinary:NO:64",
+		"value_json":   "mediumtext:NO:16777215",
+		"created_at":   "bigint:NO:NULL",
+	}
+	rows, err := q.QueryContext(ctx, `SELECT column_name, data_type, is_nullable,
+       COALESCE(CAST(character_maximum_length AS CHAR), 'NULL')
+FROM information_schema.columns
+WHERE table_schema = DATABASE() AND BINARY table_name = BINARY ?`, table)
+	if err != nil {
+		return fmt.Errorf("inspect cache schema columns: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	seen := make(map[string]string)
+	for rows.Next() {
+		var column, dataType, nullable, maxLength string
+		if err := rows.Scan(&column, &dataType, &nullable, &maxLength); err != nil {
+			return fmt.Errorf("inspect cache schema column: %w", err)
+		}
+		seen[column] = dataType + ":" + nullable + ":" + maxLength
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("inspect cache schema columns: %w", err)
+	}
+	if len(seen) != len(expected) {
+		return fmt.Errorf("mysql cache: table %q does not match schema version 1: got %d columns, want %d", table, len(seen), len(expected))
+	}
+	for column, want := range expected {
+		if got := seen[column]; got != want {
+			return fmt.Errorf("mysql cache: table %q does not match schema version 1: column %s is %q, want %q", table, column, got, want)
+		}
+	}
+	var primaryColumns int
+	if err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM information_schema.statistics
+WHERE table_schema = DATABASE() AND BINARY table_name = BINARY ?
+  AND index_name = 'PRIMARY' AND column_name = 'key_digest' AND seq_in_index = 1`, table).Scan(&primaryColumns); err != nil {
+		return fmt.Errorf("inspect cache schema primary key: %w", err)
+	}
+	if primaryColumns != 1 {
+		return fmt.Errorf("mysql cache: table %q does not match schema version 1: key_digest is not the primary key", table)
+	}
+	return nil
 }
 
 func mysqlCacheSchemaComponent(table string) string {

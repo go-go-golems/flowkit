@@ -396,6 +396,61 @@ FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name =
 	require.Empty(t, want, "expected identity and metadata columns were not inspected")
 }
 
+func TestMySQLCacheMigrationRecoversFromInitializationMarker(t *testing.T) {
+	dsn := mysqlTestDSN(t)
+	table := uniqueCacheTable(t)
+	db, err := sql.Open("mysql", dsn)
+	require.NoError(t, err)
+	component := mysqlCacheSchemaComponent(table)
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(), "DELETE FROM flowkit_schema_version WHERE component = ?", component)
+		_, _ = db.ExecContext(context.Background(), "DROP TABLE IF EXISTS "+quoteMySQLIdentifier(table))
+		_ = db.Close()
+	})
+	_, err = db.ExecContext(context.Background(), `CREATE TABLE IF NOT EXISTS flowkit_schema_version (
+  component VARBINARY(128) NOT NULL PRIMARY KEY,
+  schema_version BIGINT NOT NULL
+) ENGINE=InnoDB`)
+	require.NoError(t, err)
+	_, err = db.ExecContext(context.Background(),
+		"INSERT INTO flowkit_schema_version(component, schema_version) VALUES(?, 0)", component)
+	require.NoError(t, err)
+	// Simulate interruption after CREATE TABLE's implicit commit but before
+	// the component version can be finalized.
+	require.NoError(t, createMySQLCacheSchemaV1(context.Background(), db, table))
+
+	cache, err := NewMySQLCache(context.Background(), MySQLCacheOptions{DSN: dsn, TableName: table})
+	require.NoError(t, err)
+	require.NoError(t, cache.Close())
+	var version int64
+	require.NoError(t, db.QueryRowContext(context.Background(),
+		"SELECT schema_version FROM flowkit_schema_version WHERE component = ?", component).Scan(&version))
+	require.Equal(t, mysqlCacheSchemaV1, version)
+}
+
+func TestMySQLCacheTableInspectionUsesCaseSensitiveIdentity(t *testing.T) {
+	t.Parallel()
+	dsn := mysqlTestDSN(t)
+	upperTable := "CacheCaseUpper"
+	lowerTable := "cachecaseupper"
+	upper, err := NewMySQLCache(context.Background(), MySQLCacheOptions{DSN: dsn, TableName: upperTable})
+	require.NoError(t, err)
+	lower, err := NewMySQLCache(context.Background(), MySQLCacheOptions{DSN: dsn, TableName: lowerTable})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		for _, table := range []string{upperTable, lowerTable} {
+			_, _ = upper.db.ExecContext(context.Background(), "DELETE FROM flowkit_schema_version WHERE component = ?", mysqlCacheSchemaComponent(table))
+			_, _ = upper.db.ExecContext(context.Background(), "DROP TABLE IF EXISTS "+quoteMySQLIdentifier(table))
+		}
+		_ = lower.Close()
+		_ = upper.Close()
+	})
+	var count int
+	require.NoError(t, upper.db.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM information_schema.tables
+WHERE table_schema = DATABASE() AND BINARY table_name IN (BINARY ?, BINARY ?)`, upperTable, lowerTable).Scan(&count))
+	require.Equal(t, 2, count)
+}
+
 func TestNewMySQLCacheRejectsUnversionedPrototype(t *testing.T) {
 	t.Parallel()
 	dsn := mysqlTestDSN(t)
