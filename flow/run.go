@@ -26,14 +26,23 @@ type Preflight struct {
 	AllowPartial    bool
 }
 
-// Options carries the run-scoped collaborators: the durable store, the
-// event ledger, the monetary preflight, and optional per-resource rate
-// limiters composed after the finite budgets.
+// Options carries the run-scoped collaborators: the durable store, exact
+// event ledger, aggregate reporter, monetary preflight, and optional
+// per-resource rate limiters composed after the finite budgets.
 type Options struct {
 	// Store is the durability seam; nil means an uncached run.
 	Store Store
-	// Ledger optionally journals run events; a ledger error fails the run.
+	// Ledger optionally journals exact run events; a ledger error fails the run.
 	Ledger Ledger
+	// Reporter optionally receives immutable aggregate snapshots. A reporter
+	// error fails the run. ReportInterval selects periodic frequency; values at
+	// or below zero disable periodic snapshots while retaining initial and
+	// terminal snapshots.
+	Reporter       Reporter
+	ReportInterval time.Duration
+	// Clock supplies UTC event and snapshot timestamps. Nil selects time.Now.
+	// It exists for deterministic tests and should not encode domain time.
+	Clock func() time.Time
 	// Preflight optionally gates plan coverage and estimated cost before
 	// item one.
 	Preflight *Preflight
