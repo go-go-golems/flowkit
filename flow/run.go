@@ -410,7 +410,7 @@ func Run[I, O any](ctx context.Context, s Step[I, O], items []I, o Options) ([]R
 		return nil, Report{}, err
 	}
 
-	rootObservation := o.observation == nil
+	rootObservation := (o.Reporter != nil || o.Ledger != nil) && o.observation == nil
 	if rootObservation {
 		o = o.withObservation()
 		if err := emitLedger(ctx, o, Event{Index: -1, Type: EventRunStarted, Total: len(items)}); err != nil {

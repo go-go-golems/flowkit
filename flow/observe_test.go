@@ -32,6 +32,20 @@ func (reporter *recordingReporter) values() []Snapshot {
 	return append([]Snapshot(nil), reporter.snapshots...)
 }
 
+func TestRunWithoutObserversDoesNotInitializeObservationClock(t *testing.T) {
+	clockCalls := 0
+	results, report, err := Run(t.Context(), doubler("plain", Policy{}), []int{1}, Options{
+		Clock: func() time.Time {
+			clockCalls++
+			return time.Unix(1, 0)
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, 2, results[0].Value)
+	require.Equal(t, 1, report.Step("plain").Items)
+	require.Zero(t, clockCalls)
+}
+
 func TestRunReporterReceivesInitialAndTerminalSnapshots(t *testing.T) {
 	reporter := &recordingReporter{}
 	clock := func() time.Time { return time.Unix(100, 0) }

@@ -191,7 +191,8 @@ const (
 	// EventRunStarted records the boundary after validation and preflight and
 	// before the first item is admitted.
 	EventRunStarted EventType = "run_started"
-	// EventStepStarted records the first item entering one pipeline stage.
+	// EventStepStarted records one pipeline stage runner starting. Streaming
+	// downstream stages may start before their first item arrives.
 	EventStepStarted EventType = "step_started"
 	// EventStepCompleted records one stage draining successfully.
 	EventStepCompleted EventType = "step_completed"
