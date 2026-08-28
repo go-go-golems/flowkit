@@ -34,3 +34,15 @@ Phase 1: defined immutable report snapshots, deep-clone semantics, Reporter API,
 - /home/manuel/workspaces/2026-08-24/use-optkit/flowkit/flow/report_test.go — Clone and reporter contract tests
 - /home/manuel/workspaces/2026-08-24/use-optkit/flowkit/flow/run.go — Run-scoped reporter configuration
 
+
+## 2026-08-28
+
+Phase 2: wired initial/periodic/terminal snapshots and exact lifecycle events through scalar, pipeline, Bulk and Batched execution; reporter failures cancel work and terminal delivery is bounded (commit 73e447b).
+
+### Related Files
+
+- /home/manuel/workspaces/2026-08-24/use-optkit/flowkit/flow/bulk.go — Embedding-shaped Bulk reporting parity
+- /home/manuel/workspaces/2026-08-24/use-optkit/flowkit/flow/observe.go — Shared observation runtime and fail-closed periodic reporter
+- /home/manuel/workspaces/2026-08-24/use-optkit/flowkit/flow/observe_test.go — Lifecycle reporter failure and nested parity tests
+- /home/manuel/workspaces/2026-08-24/use-optkit/flowkit/flow/run.go — Root and stage lifecycle integration
+

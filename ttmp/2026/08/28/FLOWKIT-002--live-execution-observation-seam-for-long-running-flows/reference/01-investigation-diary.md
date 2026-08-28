@@ -194,3 +194,72 @@ The existing exact `Ledger` vocabulary was extended with run and step lifecycle 
 ### Technical details
 - This phase intentionally did not invoke reporters or emit lifecycle events yet.
 - Reporter errors are documented as fatal; runtime enforcement belongs to Phase 2.
+
+## Step 4: Wire live reporting through scalar, pipeline, bulk, and nested execution
+
+The runtime phase now emits one root run lifecycle, step boundaries, initial and terminal snapshots, and optional periodic snapshots. Reporter failure cancels active execution and is returned as the primary observability error; terminal delivery gets a bounded cancellation-independent context so a canceled run can still record its last state.
+
+Bulk execution uses the same periodic helper and exact ledger timestamping as scalar execution. Batched nested runs share observation sequence/start time and do not manufacture extra root-run boundaries, while their group and repair steps remain visible.
+
+### Prompt Context
+
+**User prompt (verbatim):** (same as Step 3)
+
+**Assistant interpretation:** Complete Phase 2 runner integration across all execution shapes and commit it independently.
+
+**Inferred user intent:** Ensure downstream durable progress is canonical, fail-closed, and not limited to the simplest Flowkit path.
+
+**Commit (code):** 73e447bfae11a52d49c241f4d9e67ece760ae8ce — "FLOWKIT-002: publish live run progress"
+
+### What I did
+- Added `flow/observe.go` with timestamping, shared snapshot sequences, bounded terminal reporting, ledger emission, and periodic reporter cancellation.
+- Refactored `Run` into validation/lifecycle plus `runCore`.
+- Added root `run_started` and exactly one terminal run event.
+- Added stage start/completion events around pipeline and override execution.
+- Replaced scalar and Bulk log-only observation with optional periodic reporter delivery while retaining logs.
+- Timestamped every exact ledger event through one helper.
+- Shared observation state through Batched nested group/repair runs.
+- Added scalar, periodic, reporter-failure, lifecycle, Bulk parity, and Batched lifecycle tests.
+- Ran `go test ./flow -count=1` and `go test ./... -count=1`.
+
+### Why
+- RAG-TTC needs progress during provider work, not only the terminal report.
+- A configured durable reporter must stop spending if its custody record cannot be written.
+
+### What worked
+- All repository tests passed.
+- Existing cache, retry, budget, quarantine, and ordering tests remained green.
+- Nested Batched execution emitted one root lifecycle while retaining step visibility.
+
+### What didn't work
+- The first `gofmt` attempt failed with:
+  `flow/observe.go:115:3: expected ';', found '('`
+  and
+  `flow/observe.go:122:2: expression in go must be function call`.
+  The reporter goroutine was missing one closing brace around its `select`/`for`; the block was corrected and tests then passed.
+
+### What I learned
+- Reporter cancellation must propagate into the worker context; merely checking an error after provider work defeats fail-closed observation.
+- Root lifecycle and nested step visibility require shared observation state but distinct boundary ownership.
+
+### What was tricky to build
+- `Batched` invokes nested `Run` calls for group and repair work. Without a shared observation pointer, each nested run would emit a false root lifecycle and restart snapshot sequence numbering. Sharing state through the copied `Options` preserves one root identity.
+- Bulk has its own execution engine and progress logger, so scalar-only changes would have left embeddings—the primary consumer—unobserved.
+
+### What warrants a second pair of eyes
+- Whether periodic snapshots from nested Batched runs should be documented as partial step reports until the terminal full report.
+- Terminal timeout duration and error joining.
+- Whether lifecycle ledger implementations need an explicit serialization wrapper beyond their documented thread-safety responsibility.
+
+### What should be done in the future
+- Run race tests, add public package documentation/examples, and complete the no-reporter compatibility and release validation phase.
+
+### Code review instructions
+- Start at `flow/observe.go`, then `Run`/`runStages` in `flow/run.go`, then `runBulk`.
+- Review `flow/observe_test.go` for the contract and nested lifecycle expectations.
+- Validate with `go test ./... -count=1` and `go test -race ./flow -count=1`.
+
+### Technical details
+- Periodic snapshots are disabled when `ReportInterval <= 0`; initial and terminal snapshots still publish.
+- Existing thirty-second progress logs remain independent of reporter sampling.
+- Terminal snapshots and events use a five-second bounded `context.WithoutCancel` context.
