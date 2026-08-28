@@ -53,6 +53,9 @@ type Options struct {
 
 	// env shares budgets across the stages and sub-runs of one Run call.
 	env *runEnv
+	// observation shares snapshot sequence and start time across nested runs
+	// used by Batched group and repair execution.
+	observation *observationState
 }
 
 // Share returns Options whose budgets, preflight arithmetic, and admission
@@ -406,8 +409,53 @@ func Run[I, O any](ctx context.Context, s Step[I, O], items []I, o Options) ([]R
 	if err := o.env.ensure(collectPlans(stages)); err != nil {
 		return nil, Report{}, err
 	}
+
+	rootObservation := o.observation == nil
+	if rootObservation {
+		o = o.withObservation()
+		if err := emitLedger(ctx, o, Event{Index: -1, Type: EventRunStarted, Total: len(items)}); err != nil {
+			return nil, Report{}, err
+		}
+		if err := o.publish(ctx, Report{}, len(items), false); err != nil {
+			_ = emitLedger(context.WithoutCancel(ctx), o, Event{Index: -1, Type: EventRunFailed, Total: len(items), Error: err.Error()})
+			return nil, Report{}, err
+		}
+	}
+
+	results, report, runErr := runCore(ctx, s, stages, items, o)
+	if !rootObservation {
+		return results, report, runErr
+	}
+	if err := o.publishTerminal(ctx, report, len(items)); err != nil {
+		runErr = errors.Join(runErr, err)
+	}
+	terminalType := EventRunCompleted
+	terminalEvent := Event{Index: -1, Type: terminalType, Total: len(items)}
+	if runErr != nil {
+		terminalEvent.Type = EventRunFailed
+		terminalEvent.Error = runErr.Error()
+	}
+	terminalContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), terminalReportTimeout)
+	defer cancel()
+	if err := emitLedger(terminalContext, o, terminalEvent); err != nil {
+		runErr = errors.Join(runErr, err)
+	}
+	if runErr != nil {
+		return nil, report, runErr
+	}
+	return results, report, nil
+}
+
+func runCore[I, O any](ctx context.Context, s Step[I, O], stages []stageSpec, items []I, o Options) ([]Result[O], Report, error) {
 	if s.override != nil {
-		return s.override(ctx, s, items, o, s.OnResult)
+		if err := emitLedger(ctx, o, Event{Step: s.Name, Index: -1, Type: EventStepStarted, Total: len(items)}); err != nil {
+			return nil, Report{}, err
+		}
+		results, report, err := s.override(ctx, s, items, o, s.OnResult)
+		if err == nil {
+			err = emitLedger(ctx, o, Event{Step: s.Name, Index: -1, Type: EventStepCompleted, Total: len(items)})
+		}
+		return results, report, err
 	}
 
 	inputs := make([]erasedItem, len(items))
@@ -565,11 +613,18 @@ func runStages(ctx context.Context, stages []stageSpec, inputs []erasedItem, o O
 		runners[index] = runner
 	}
 
+	currentReport := func() Report {
+		report := Report{}
+		for _, runner := range runners {
+			report.merge(runner.report())
+		}
+		return report
+	}
+	runContext, stopReporter := startPeriodicReporter(ctx, o, len(inputs), currentReport)
 	progressStop := make(chan struct{})
-	defer close(progressStop)
 	go logProgress(progressStop, len(inputs), runners)
 
-	group, groupContext := errgroup.WithContext(ctx)
+	group, groupContext := errgroup.WithContext(runContext)
 	feed := make(chan erasedItem)
 	group.Go(func() error {
 		defer close(feed)
@@ -591,7 +646,13 @@ func runStages(ctx context.Context, stages []stageSpec, inputs []erasedItem, o O
 		boundRunner := runner
 		group.Go(func() error {
 			defer close(out)
+			if err := emitLedger(groupContext, o, Event{Step: stage.name, Index: -1, Type: EventStepStarted, Total: len(inputs)}); err != nil {
+				return fmt.Errorf("stage %q: %w", stage.name, err)
+			}
 			if err := boundRunner.run(groupContext, in, out); err != nil {
+				return fmt.Errorf("stage %q: %w", stage.name, err)
+			}
+			if err := emitLedger(groupContext, o, Event{Step: stage.name, Index: -1, Type: EventStepCompleted, Total: len(inputs)}); err != nil {
 				return fmt.Errorf("stage %q: %w", stage.name, err)
 			}
 			return nil
@@ -609,9 +670,11 @@ func runStages(ctx context.Context, stages []stageSpec, inputs []erasedItem, o O
 	})
 
 	err := group.Wait()
-	report := Report{}
-	for _, runner := range runners {
-		report.merge(runner.report())
+	close(progressStop)
+	reporterErr := stopReporter()
+	report := currentReport()
+	if reporterErr != nil {
+		return nil, report, reporterErr
 	}
 	if err != nil {
 		return nil, report, err
@@ -876,12 +939,9 @@ func (runner *typedRunner[I, O]) notify(ctx context.Context, index int, value O,
 }
 
 func (runner *typedRunner[I, O]) event(ctx context.Context, event Event) error {
-	if runner.options.Ledger == nil {
-		return nil
-	}
 	event.Step = runner.step.Name
-	if err := runner.options.Ledger.Event(ctx, event); err != nil {
-		return fmt.Errorf("step %q: ledger event: %w", runner.step.Name, err)
+	if err := emitLedger(ctx, runner.options, event); err != nil {
+		return fmt.Errorf("step %q: %w", runner.step.Name, err)
 	}
 	return nil
 }
