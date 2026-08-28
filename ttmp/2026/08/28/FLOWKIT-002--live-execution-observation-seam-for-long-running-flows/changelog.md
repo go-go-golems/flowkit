@@ -23,3 +23,14 @@ Validated the guide and diary with frontmatter checks and clean ticket doctor; c
 
 - /home/manuel/workspaces/2026-08-24/use-optkit/flowkit/ttmp/2026/08/28/FLOWKIT-002--live-execution-observation-seam-for-long-running-flows/reference/01-investigation-diary.md — Validation and delivery receipt
 
+
+## 2026-08-28
+
+Phase 1: defined immutable report snapshots, deep-clone semantics, Reporter API, report interval/clock options, and lifecycle event vocabulary (commit 29847b6).
+
+### Related Files
+
+- /home/manuel/workspaces/2026-08-24/use-optkit/flowkit/flow/report.go — Public observation contracts and deep cloning
+- /home/manuel/workspaces/2026-08-24/use-optkit/flowkit/flow/report_test.go — Clone and reporter contract tests
+- /home/manuel/workspaces/2026-08-24/use-optkit/flowkit/flow/run.go — Run-scoped reporter configuration
+

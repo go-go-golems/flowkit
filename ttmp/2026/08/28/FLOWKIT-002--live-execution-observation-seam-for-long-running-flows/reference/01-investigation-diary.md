@@ -137,3 +137,60 @@ No production implementation was attempted: the unchecked ticket tasks remain th
 - Remote destination: `/ai/2026/08/28/FLOWKIT-002`.
 - Verified document: `FLOWKIT-002 Live Execution Observation`.
 - Repository: `flowkit`.
+
+## Step 3: Define immutable observation contracts
+
+The first implementation phase added the public data contracts needed by downstream run recorders without yet changing execution behavior. Reports now support defensive deep cloning, aggregate snapshots have explicit sequence/time/terminal metadata, and callers can configure a fail-closed `Reporter`, interval, and deterministic clock.
+
+The existing exact `Ledger` vocabulary was extended with run and step lifecycle event types instead of creating a second event bus. Existing item-event JSON semantics were preserved, including index zero.
+
+### Prompt Context
+
+**User prompt (verbatim):** "work on FLOWKIT-002, commit at appropriate intervals and keep a detailed diary as you work (using the diary format from the skill) Print out a brutalist work slip with the plan / different phases for the ticket. then before stsarting a phase, plrint a split about the phase, and print one when the phase is done.\n\n---\n\nThen work on RAG-TTC-WORK-001 and RAG-TTC-WORK-002."
+
+**Assistant interpretation:** Implement FLOWKIT-002 in phased, tested commits with printed phase boundaries and strict diary entries, then implement its two RAG-TTC consumers.
+
+**Inferred user intent:** Produce a reliable backend chain with a physical execution trail and reviewable Git history.
+
+**Commit (code):** 29847b6e40aef1515dcaf84684b21a00245d0ab8 — "FLOWKIT-002: define live progress contracts"
+
+### What I did
+- Added `Report.Clone` and `StepReport.Clone` with deep copies of all maps.
+- Added immutable `Snapshot`, `Reporter`, and `ReporterFunc` contracts.
+- Added `Options.Reporter`, `ReportInterval`, and injectable `Clock`.
+- Added run/step lifecycle `EventType` values and event timestamps/total.
+- Added report clone and reporter adapter tests.
+- Ran `gofmt` and `go test ./flow -count=1`.
+
+### Why
+- Retained progress snapshots must never alias counters still being mutated by workers.
+- RAG-TTC needs stable timestamps, terminal markers, and a supported sink rather than log parsing.
+
+### What worked
+- Existing types accepted the extension without changing current execution behavior.
+- The focused Flow package tests passed.
+
+### What didn't work
+- N/A
+
+### What I learned
+- `Event.Index` must not use `omitempty`: item zero is a real event identity.
+- The contract can remain opt-in, preserving zero-cost behavior for callers without a reporter.
+
+### What was tricky to build
+- Deep cloning required copying four map layers: steps, retry classes, spend snapshots, and meters. A shallow struct copy would have exposed live mutable state to reporters.
+
+### What warrants a second pair of eyes
+- Whether public lifecycle event names and fields are sufficient before release.
+- Whether `Clock` should be a function or a small interface.
+
+### What should be done in the future
+- Wire reporting and lifecycle emission into scalar, pipeline, and bulk execution with terminal parity.
+
+### Code review instructions
+- Start at `flow/report.go`, then `Options` in `flow/run.go` and `flow/report_test.go`.
+- Validate with `go test ./flow -count=1`.
+
+### Technical details
+- This phase intentionally did not invoke reporters or emit lifecycle events yet.
+- Reporter errors are documented as fatal; runtime enforcement belongs to Phase 2.
