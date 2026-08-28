@@ -46,3 +46,15 @@ Phase 2: wired initial/periodic/terminal snapshots and exact lifecycle events th
 - /home/manuel/workspaces/2026-08-24/use-optkit/flowkit/flow/observe_test.go — Lifecycle reporter failure and nested parity tests
 - /home/manuel/workspaces/2026-08-24/use-optkit/flowkit/flow/run.go — Root and stage lifecycle integration
 
+
+## 2026-08-28
+
+Phase 3: hardened zero-observer compatibility, documented lifecycle/snapshot semantics, added a runnable progress reporter example, and passed repeated race, vet, full tests and make ci-check (commit 79e586c). Module merge/tag remains the sole open release step.
+
+### Related Files
+
+- /home/manuel/workspaces/2026-08-24/use-optkit/flowkit/README.md — Public live-progress quick start
+- /home/manuel/workspaces/2026-08-24/use-optkit/flowkit/docs/flowkit-developer-guide.md — Detailed observation API guidance
+- /home/manuel/workspaces/2026-08-24/use-optkit/flowkit/examples/progress-reporter/main.go — Executable reporter example
+- /home/manuel/workspaces/2026-08-24/use-optkit/flowkit/flow/observe_test.go — Race and compatibility contract
+

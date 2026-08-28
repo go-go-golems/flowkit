@@ -263,3 +263,66 @@ Bulk execution uses the same periodic helper and exact ledger timestamping as sc
 - Periodic snapshots are disabled when `ReportInterval <= 0`; initial and terminal snapshots still publish.
 - Existing thirty-second progress logs remain independent of reporter sampling.
 - Terminal snapshots and events use a five-second bounded `context.WithoutCancel` context.
+
+## Step 5: Harden compatibility, document the API, and validate the repository
+
+The final local implementation phase proved the observation path under repeated race testing and documented it for consumers. No-observer calls now avoid initializing observation state entirely, preserving the existing execution path's overhead and behavior. Public package and developer documentation explain exact ledger events, immutable sampled snapshots, fail-closed sink behavior, nested sequencing, and pipeline overlap.
+
+A runnable progress-reporter example demonstrates initial, periodic, and terminal JSON snapshots. The full repository quality gate passed, including lint, log generation checks, tests, generation, and build.
+
+### Prompt Context
+
+**User prompt (verbatim):** (same as Step 3)
+
+**Assistant interpretation:** Complete FLOWKIT-002's local implementation, compatibility proof, documentation, and validation before moving to RAG-TTC.
+
+**Inferred user intent:** Leave a release-ready dependency with strong evidence rather than immediately layering product code over an unstable API.
+
+**Commit (code):** 79e586cc7371769ff2afb1b00efbd4e573bf52fc — "FLOWKIT-002: document and harden progress reporting"
+
+### What I did
+- Avoided allocating observation state when neither Ledger nor Reporter is configured.
+- Clarified that streaming step-start means the runner is ready, not that an item has arrived.
+- Added a no-observer compatibility test.
+- Expanded package docs, README, and developer guide.
+- Added `examples/progress-reporter`.
+- Ran `go test -race ./flow -count=10`.
+- Ran `go test ./... -count=1`, `go test -race ./... -count=1`, and `go vet ./...`.
+- Ran `go run ./examples/progress-reporter` and inspected the snapshot sequence.
+- Ran `make ci-check`; lint, logcopter, tests, generation, and build passed.
+
+### Why
+- A reusable concurrency API needs race evidence and an executable example before downstream adoption.
+- Opt-in observability should impose no observation-state allocation on unchanged callers.
+
+### What worked
+- Ten repeated race runs of the Flow package passed.
+- Full race, vet, and CI checks passed.
+- The example emitted sequences 1–5 with initial, periodic, and terminal snapshots followed by results `2`, `4`, `6`.
+
+### What didn't work
+- N/A
+
+### What I learned
+- Streaming pipeline stage lifecycles overlap by design; documentation must not imply strictly sequential phase starts.
+- The reporter example is also a compact manual compatibility check for JSON shape and terminal parity.
+
+### What was tricky to build
+- The final compatibility optimization required distinguishing “root execution with no observer” from “nested execution sharing an observer.” The predicate now requires a Ledger or Reporter before creating root observation state.
+
+### What warrants a second pair of eyes
+- Public API naming before assigning a release tag.
+- Whether five seconds is the right terminal sink timeout.
+- Whether downstream durable reporters need an exported configurable timeout in a future version.
+
+### What should be done in the future
+- Merge and release the Flowkit API, then update RAG-TTC's module requirement from v0.1.1. Until release, the workspace checkout supplies the implementation for dependent development.
+
+### Code review instructions
+- Review commits `29847b6`, `73e447b`, and `79e586c` in order.
+- Run `make ci-check` and `go test -race ./... -count=1`.
+- Run `go run ./examples/progress-reporter` and verify the last snapshot is terminal and equals the returned report.
+
+### Technical details
+- `make ci-check` completed with zero lint issues.
+- The release/publication task remains open until the module is merged/tagged; all local implementation and documentation work is complete.
