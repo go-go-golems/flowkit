@@ -392,3 +392,59 @@ The correction makes the root execution the only owner of external publication. 
 - Nested runs retain Ledger step/item events but cannot publish externally.
 - Root `Snapshot.Total` remains the original input length throughout a Batched run.
 - Invalid runner configuration emits neither ledger events nor snapshots.
+
+## Step 7: Publish the technical deep-dive report
+
+The completed design, implementation diary, final source, tests, PR diff, and review corrections were synthesized into a long-form project report in the go-go-parc Obsidian vault. The report teaches the execution model, exact-versus-sampled observation split, immutable snapshot contract, root publication ownership, nested report aggregation, validation boundary, concurrency semantics, failure history, and verification evidence.
+
+The article uses direct technical explanation, real code, tables, state sequences, and Mermaid diagrams. It contains no analogies and records the current PR/release status rather than presenting the work as already merged.
+
+### Prompt Context
+
+**User prompt (verbatim):** (same as Step 6)
+
+**Assistant interpretation:** Preserve the complete FLOWKIT-002 implementation and review story as a durable textbook-style project report, then commit and push the vault.
+
+**Inferred user intent:** Make the work understandable and reusable after the immediate PR context disappears.
+
+**Commit (documentation):** 84d1201af3c6df8efe81cc54b82c1f43dc8919e4 — "docs: add Flowkit observation deep dive" (`go-go-parc`)
+
+### What I did
+- Re-read the complete FLOWKIT-002 design and diary.
+- Read the final report, observation, runner, Bulk, Batched, and regression-test code.
+- Compared PR #9 with `origin/main` and recorded its commit/file scope.
+- Wrote `Projects/2026/08/29/PROJ - Flowkit - Live Execution Observation.md` in the vault.
+- Checked whitespace, searched for prohibited analogy patterns, and verified the note is the only staged vault change.
+- Committed and pushed vault `main`.
+
+### Why
+- The architecture depends on concurrency and lifecycle invariants that a file list or PR summary would not preserve.
+
+### What worked
+- The report contains 3,284 words, 466 lines, focused code excerpts, two Mermaid diagrams, comparison/state tables, and concrete validation evidence.
+- Vault commit `84d1201` pushed successfully to `go-go-golems/go-go-parc`.
+
+### What didn't work
+- The first Flowkit push targeted the upstream `origin` remote, while PR #9 uses the `wesen` fork. The commit was then pushed to `wesen/task/use-optkit`, and the accidentally created upstream branch was immediately deleted.
+
+### What I learned
+- PR head ownership must be checked before pushing when a repository has both upstream and fork remotes.
+
+### What was tricky to build
+- The report had to describe the original nested-publication failure accurately without teaching the superseded design as current behavior. Its structure introduces the invariant first, then explains the review finding and corrected report-registration path.
+
+### What warrants a second pair of eyes
+- Verify the report's stage-builder probing caveat remains accurate if the PR changes before merge.
+- Update the current-status section after release if the note becomes a primary onboarding reference.
+
+### What should be done in the future
+- Merge and release PR #9, then update the report's status and downstream module versions in a new dated follow-up note if substantial details change.
+
+### Code review instructions
+- Read the report sections on publication ownership and validation before reviewing custom-engine code.
+- Verify vault commit `84d1201` contains only the new project report.
+
+### Technical details
+- Vault: `/home/manuel/code/wesen/go-go-golems/go-go-parc`.
+- Report: `Projects/2026/08/29/PROJ - Flowkit - Live Execution Observation.md`.
+- PR review threads: both resolved at Flowkit head `50138e7`.

@@ -69,3 +69,12 @@ Addressed PR #9 review: root-owned external publication now aggregates nested Ba
 - /home/manuel/workspaces/2026-08-24/use-optkit/flowkit/flow/observe_test.go — Regression tests for both review findings
 - /home/manuel/workspaces/2026-08-24/use-optkit/flowkit/flow/run.go — Root publication ownership and pre-lifecycle runner validation
 
+
+## 2026-08-28
+
+Published a 3,284-word textbook-style FLOWKIT-002 deep dive to go-go-parc and pushed vault commit 84d1201; recorded PR review resolution and the corrected fork push.
+
+### Related Files
+
+- /home/manuel/code/wesen/go-go-golems/go-go-parc/Projects/2026/08/29/PROJ - Flowkit - Live Execution Observation.md — Durable project report covering architecture implementation review corrections and validation
+
