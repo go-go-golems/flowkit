@@ -700,8 +700,15 @@ func TestRunLedgerReceivesEvents(t *testing.T) {
 	_, _, err = Run(context.Background(), step, []int{1, 2}, Options{Store: store, Ledger: ledger})
 	require.NoError(t, err)
 	require.Len(t, ledger.byType(EventHit), 2)
+	require.Len(t, ledger.byType(EventRunStarted), 2)
+	require.Len(t, ledger.byType(EventRunCompleted), 2)
+	require.Len(t, ledger.byType(EventStepStarted), 2)
+	require.Len(t, ledger.byType(EventStepCompleted), 2)
 	for _, event := range ledger.events {
-		require.Equal(t, "journaled", event.Step)
+		require.False(t, event.At.IsZero())
+		if event.Type != EventRunStarted && event.Type != EventRunCompleted {
+			require.Equal(t, "journaled", event.Step)
+		}
 	}
 }
 

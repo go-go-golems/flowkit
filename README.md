@@ -68,12 +68,27 @@ results, report, err := flow.Run(ctx, step, inputs, flow.Options{Store: cache})
 
 Flow preserves input order, executes duplicate keys once per process, loads hits before admission, and atomically commits successful misses.
 
+## Live progress
+
+Configure a `flow.Reporter` to receive deep-cloned initial, periodic, and terminal snapshots without parsing logs. Exact item and lifecycle events remain available through `flow.Ledger`; configured sink failures fail closed.
+
+```go
+options := flow.Options{
+    Reporter: flow.ReporterFunc(writeSnapshot),
+    ReportInterval: 2 * time.Second,
+}
+results, report, err := flow.Run(ctx, step, inputs, options)
+```
+
+Run the complete example with `go run ./examples/progress-reporter`.
+
 ## Documentation
 
 - [Developer guide](./docs/flowkit-developer-guide.md) — Glazed help-entry formatted concepts, API guidance, invariants, and troubleshooting.
 - [Bounded map example](./examples/bounded-map)
 - [Cached step example](./examples/cached-step)
 - [Pipeline example](./examples/pipeline)
+- [Progress reporter example](./examples/progress-reporter)
 - [Extraction design and implementation guide](./ttmp/2026/08/12/FLOWKIT-001--extract-flow-and-execution-from-ragkit/design-doc/01-flowkit-extraction-architecture-and-implementation-guide.md)
 
 ## Compatibility contract

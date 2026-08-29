@@ -3,6 +3,7 @@ package flow
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/go-go-golems/flowkit/execution"
 )
@@ -58,6 +59,15 @@ func Batched[I, O any](repair Step[I, O], spec BatchSpec[I, O]) Step[I, O] {
 		currentSpec.Policy = current.Policy
 		return runBatched(ctx, repair, currentSpec, current.Name, items, o, onResult)
 	}
+	step.validateOverride = func(current Step[I, O]) error {
+		if spec.Group == nil || spec.DoAll == nil || spec.Split == nil {
+			return fmt.Errorf("batched step %q needs Group, DoAll, and Split", current.Name)
+		}
+		if repair.Do == nil && repair.override == nil && repair.stages == nil {
+			return fmt.Errorf("batched step %q needs a runnable repair step", current.Name)
+		}
+		return nil
+	}
 	return step
 }
 
@@ -82,7 +92,33 @@ func runBatched[I, O any](
 	o Options,
 	onResult func(context.Context, int, O, execution.CacheOutcome) error,
 ) ([]Result[O], Report, error) {
+	var reportMutex sync.Mutex
 	report := Report{}
+	var activeReport func() Report
+	currentReport := func() Report {
+		reportMutex.Lock()
+		base := report.Clone()
+		active := activeReport
+		reportMutex.Unlock()
+		if active != nil {
+			base.merge(active())
+		}
+		return base
+	}
+	setActiveReport := func(current func() Report) {
+		reportMutex.Lock()
+		activeReport = current
+		reportMutex.Unlock()
+	}
+	mergeCompleted := func(completed Report) {
+		reportMutex.Lock()
+		activeReport = nil
+		report.merge(completed)
+		reportMutex.Unlock()
+	}
+	if o.registerReport != nil {
+		o.registerReport(currentReport)
+	}
 	if spec.Group == nil || spec.DoAll == nil || spec.Split == nil {
 		return nil, report, fmt.Errorf("batched step %q needs Group, DoAll, and Split", name)
 	}
@@ -124,10 +160,13 @@ func runBatched[I, O any](
 		}
 		groupInputs[groupIndex] = members
 	}
-	rawResponses, groupReport, err := Run(ctx, groupStep, groupInputs, o)
-	report.merge(groupReport)
+	groupOptions := o
+	groupOptions.Reporter = nil
+	groupOptions.registerReport = setActiveReport
+	rawResponses, groupReport, err := Run(ctx, groupStep, groupInputs, groupOptions)
+	mergeCompleted(groupReport)
 	if err != nil {
-		return nil, report, err
+		return nil, currentReport(), err
 	}
 
 	results := make([]Result[O], len(items))
@@ -157,14 +196,14 @@ func runBatched[I, O any](
 			results[itemIndex] = Result[O]{Value: value}
 			if onResult != nil {
 				if err := onResult(ctx, itemIndex, value, execution.CacheOutcome{}); err != nil {
-					return nil, report, fmt.Errorf("step %q item %d: result hook: %w", name, itemIndex, err)
+					return nil, currentReport(), fmt.Errorf("step %q item %d: result hook: %w", name, itemIndex, err)
 				}
 			}
 		}
 	}
 
 	if len(missing) == 0 {
-		return results, report, nil
+		return results, currentReport(), nil
 	}
 	repairItems := make([]I, len(missing))
 	for position, itemIndex := range missing {
@@ -181,13 +220,15 @@ func runBatched[I, O any](
 		}
 	}
 	repairOptions := o
+	repairOptions.Reporter = nil
+	repairOptions.registerReport = setActiveReport
 	if o.Ledger != nil {
 		repairOptions.Ledger = remappedLedger{inner: o.Ledger, indexes: missing}
 	}
 	repaired, repairReport, err := Run(ctx, repairForRun, repairItems, repairOptions)
-	report.merge(repairReport)
+	mergeCompleted(repairReport)
 	if err != nil {
-		return nil, report, err
+		return nil, currentReport(), err
 	}
 	for position, itemIndex := range missing {
 		result := repaired[position]
@@ -199,9 +240,9 @@ func runBatched[I, O any](
 		results[itemIndex] = result
 		if result.Quarantined == nil && !result.Skipped && onResult != nil {
 			if err := onResult(ctx, itemIndex, result.Value, result.Cache); err != nil {
-				return nil, report, fmt.Errorf("step %q item %d: result hook: %w", name, itemIndex, err)
+				return nil, currentReport(), fmt.Errorf("step %q item %d: result hook: %w", name, itemIndex, err)
 			}
 		}
 	}
-	return results, report, nil
+	return results, currentReport(), nil
 }

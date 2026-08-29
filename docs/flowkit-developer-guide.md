@@ -142,7 +142,25 @@ Set `Barrier` only when a stage truly requires all upstream results. Barriers re
 
 ## Observe runs
 
-`StepReport` records items, cache traffic, physical work calls, retries, quarantine/skip decisions, resource snapshots, and meters. `OnResult` observes successful hits and fresh values. A `Ledger` receives lifecycle events. Hook or ledger errors fail the run because these observers commonly publish required artifacts.
+`StepReport` records items, cache traffic, physical work calls, retries, quarantine/skip decisions, resource snapshots, and meters. `OnResult` observes successful hits and fresh values when a domain adapter needs to publish typed artifacts.
+
+A `Ledger` receives exact timestamped events: root run boundaries, stage-runner boundaries, cache outcomes, retries, quarantines, and skips. A `Reporter` receives immutable aggregate `Snapshot` values. Configure a positive `ReportInterval` for periodic snapshots; initial and terminal snapshots are delivered whenever a reporter is present, even when periodic reporting is disabled.
+
+```go
+reporter := flow.ReporterFunc(func(ctx context.Context, snapshot flow.Snapshot) error {
+    return json.NewEncoder(progressFile).Encode(snapshot)
+})
+results, report, err := flow.Run(ctx, step, inputs, flow.Options{
+    Store:          cache,
+    Ledger:         journal,
+    Reporter:       reporter,
+    ReportInterval: 2 * time.Second,
+})
+```
+
+Snapshot reports are deep clones and may be retained after the callback. Sequence numbers and start time are shared through nested `Batched` group/repair runs; exactly one root run lifecycle is emitted. Streaming pipeline stages may overlap, so a downstream `step_started` event means its runner is ready and waiting, not necessarily that its first item has arrived.
+
+Ledger, reporter, and `OnResult` errors fail the run because these sinks commonly publish required artifacts. A reporter failure cancels active workers. Terminal delivery uses a bounded cancellation-independent context so failed and canceled work can record its final counters. Best-effort telemetry must be implemented by a wrapper that deliberately logs and returns nil.
 
 Use `AttemptMeter` when failed provider calls can still report billable usage. Use `Meter` only when successful fresh values carry usage. Cache hits are never metered as current-run spend.
 
@@ -179,5 +197,6 @@ Run unit and race tests after touching caches, budgets, reports, in-flight dedup
 - [`../examples/bounded-map`](../examples/bounded-map) — ordered bounded execution.
 - [`../examples/cached-step`](../examples/cached-step) — cache hits, duplicate suppression, and reports.
 - [`../examples/pipeline`](../examples/pipeline) — typed streaming composition.
+- [`../examples/progress-reporter`](../examples/progress-reporter) — immutable live snapshot reporting.
 - [`../flow/doc.go`](../flow/doc.go) — package scope and non-goals.
 - [`../execution/doc.go`](../execution/doc.go) — low-level execution package contract.
