@@ -188,6 +188,84 @@ func TestBulkReporterTerminalParity(t *testing.T) {
 	require.Len(t, ledger.byType(EventStepCompleted), 1)
 }
 
+func TestBatchedReporterUsesOneRootPublisherAndStableTotal(t *testing.T) {
+	reporter := &recordingReporter{}
+	repairStarted := make(chan struct{})
+	releaseRepair := make(chan struct{})
+	var once sync.Once
+	repair := Step[int, int]{
+		Name: "repair",
+		Do: func(ctx context.Context, value int) (int, error) {
+			once.Do(func() { close(repairStarted) })
+			select {
+			case <-ctx.Done():
+				return 0, ctx.Err()
+			case <-releaseRepair:
+				return value * 2, nil
+			}
+		},
+	}
+	step := Batched(repair, BatchSpec[int, int]{
+		Name:  "groups",
+		Group: func([]int) [][]int { return [][]int{{0, 1}} },
+		DoAll: func(context.Context, []int) (string, error) { return "partial", nil },
+		Split: func(_ string, _ []int) (map[int]int, error) {
+			return map[int]int{0: 2}, nil
+		},
+	})
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := Run(t.Context(), step, []int{1, 2}, Options{
+			Reporter:       reporter,
+			ReportInterval: time.Millisecond,
+		})
+		done <- err
+	}()
+	<-repairStarted
+	require.Eventually(t, func() bool {
+		for _, snapshot := range reporter.values() {
+			if snapshot.Report.Step("groups").Items == 1 && snapshot.Report.Step("repair").Items == 1 {
+				return true
+			}
+		}
+		return false
+	}, time.Second, time.Millisecond)
+	close(releaseRepair)
+	require.NoError(t, <-done)
+
+	snapshots := reporter.values()
+	for index, snapshot := range snapshots {
+		require.Equal(t, 2, snapshot.Total)
+		if index > 0 {
+			require.Equal(t, snapshots[index-1].Sequence+1, snapshot.Sequence)
+		}
+	}
+	require.True(t, snapshots[len(snapshots)-1].Terminal)
+	require.Equal(t, 1, snapshots[len(snapshots)-1].Report.Step("groups").Items)
+	require.Equal(t, 1, snapshots[len(snapshots)-1].Report.Step("repair").Items)
+}
+
+func TestInvalidRunnersEmitNoLifecycleOrSnapshots(t *testing.T) {
+	tests := []struct {
+		name string
+		step Step[int, int]
+	}{
+		{name: "plain", step: Step[int, int]{Name: "plain"}},
+		{name: "bulk", step: Bulk(doubler("bulk", Policy{}), func(context.Context, []int) ([]int, error) { return nil, nil }, 0)},
+		{name: "batched", step: Batched(doubler("repair", Policy{}), BatchSpec[int, int]{Name: "batched"})},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ledger := &recordingLedger{}
+			reporter := &recordingReporter{}
+			_, _, err := Run(t.Context(), test.step, []int{1}, Options{Ledger: ledger, Reporter: reporter})
+			require.Error(t, err)
+			require.Empty(t, ledger.events)
+			require.Empty(t, reporter.values())
+		})
+	}
+}
+
 func TestBatchedNestedRunsEmitOneRunLifecycle(t *testing.T) {
 	ledger := &recordingLedger{}
 	repair := doubler("repair", Policy{})

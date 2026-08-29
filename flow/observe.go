@@ -15,6 +15,27 @@ type observationState struct {
 	startedAt time.Time
 }
 
+type reportSource struct {
+	mutex   sync.Mutex
+	current func() Report
+}
+
+func (source *reportSource) set(current func() Report) {
+	source.mutex.Lock()
+	source.current = current
+	source.mutex.Unlock()
+}
+
+func (source *reportSource) report() Report {
+	source.mutex.Lock()
+	current := source.current
+	source.mutex.Unlock()
+	if current == nil {
+		return Report{}
+	}
+	return current()
+}
+
 func (o Options) now() time.Time {
 	if o.Clock != nil {
 		return o.Clock().UTC()

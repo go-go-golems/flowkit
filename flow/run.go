@@ -56,6 +56,9 @@ type Options struct {
 	// observation shares snapshot sequence and start time across nested runs
 	// used by Batched group and repair execution.
 	observation *observationState
+	// registerReport lets an enclosing runner read a nested engine's live
+	// cumulative report without giving that nested run an external Reporter.
+	registerReport func(func() Report)
 }
 
 // Share returns Options whose budgets, preflight arithmetic, and admission
@@ -409,6 +412,19 @@ func Run[I, O any](ctx context.Context, s Step[I, O], items []I, o Options) ([]R
 	if err := o.env.ensure(collectPlans(stages)); err != nil {
 		return nil, Report{}, err
 	}
+	// Construct and validate every runner before publishing run_started. The
+	// execution path constructs fresh runners below; these probes are side-
+	// effect free and keep invalid work out of durable lifecycle ledgers.
+	for _, stage := range stages {
+		if stage.validate != nil {
+			if err := stage.validate(); err != nil {
+				return nil, Report{}, fmt.Errorf("stage %q: %w", stage.name, err)
+			}
+		}
+		if _, err := stage.build(o); err != nil {
+			return nil, Report{}, fmt.Errorf("stage %q: %w", stage.name, err)
+		}
+	}
 
 	rootObservation := (o.Reporter != nil || o.Ledger != nil) && o.observation == nil
 	if rootObservation {
@@ -448,12 +464,21 @@ func Run[I, O any](ctx context.Context, s Step[I, O], items []I, o Options) ([]R
 
 func runCore[I, O any](ctx context.Context, s Step[I, O], stages []stageSpec, items []I, o Options) ([]Result[O], Report, error) {
 	if s.override != nil {
-		if err := emitLedger(ctx, o, Event{Step: s.Name, Index: -1, Type: EventStepStarted, Total: len(items)}); err != nil {
+		source := &reportSource{}
+		overrideOptions := o
+		overrideOptions.registerReport = source.set
+		runContext, stopReporter := startPeriodicReporter(ctx, o, len(items), source.report)
+		if err := emitLedger(runContext, o, Event{Step: s.Name, Index: -1, Type: EventStepStarted, Total: len(items)}); err != nil {
+			_ = stopReporter()
 			return nil, Report{}, err
 		}
-		results, report, err := s.override(ctx, s, items, o, s.OnResult)
+		results, report, err := s.override(runContext, s, items, overrideOptions, s.OnResult)
+		reporterErr := stopReporter()
+		if reporterErr != nil {
+			err = errors.Join(err, reporterErr)
+		}
 		if err == nil {
-			err = emitLedger(ctx, o, Event{Step: s.Name, Index: -1, Type: EventStepCompleted, Total: len(items)})
+			err = emitLedger(runContext, o, Event{Step: s.Name, Index: -1, Type: EventStepCompleted, Total: len(items)})
 		}
 		return results, report, err
 	}
@@ -518,6 +543,7 @@ type stageSpec struct {
 	policy        Policy
 	extraPolicies []policySpec
 	plans         []stagePlan
+	validate      func() error
 	build         func(o Options) (stageRunner, error)
 }
 
@@ -550,6 +576,12 @@ func stageOfStep[I, O any](s Step[I, O]) stageSpec {
 			policy:        s.Policy,
 			extraPolicies: s.extraPolicies,
 			plans:         plans,
+			validate: func() error {
+				if s.validateOverride == nil {
+					return nil
+				}
+				return s.validateOverride(s)
+			},
 			build: func(o Options) (stageRunner, error) {
 				return &overrideStageRunner[I, O]{step: s, options: o}, nil
 			},
@@ -619,6 +651,9 @@ func runStages(ctx context.Context, stages []stageSpec, inputs []erasedItem, o O
 			report.merge(runner.report())
 		}
 		return report
+	}
+	if o.registerReport != nil {
+		o.registerReport(currentReport)
 	}
 	runContext, stopReporter := startPeriodicReporter(ctx, o, len(inputs), currentReport)
 	progressStop := make(chan struct{})
@@ -690,6 +725,7 @@ type overrideStageRunner[I, O any] struct {
 	options Options
 	mutex   sync.Mutex
 	rep     Report
+	current func() Report
 }
 
 func (runner *overrideStageRunner[I, O]) run(ctx context.Context, in <-chan erasedItem, out chan<- erasedItem) error {
@@ -714,8 +750,18 @@ func (runner *overrideStageRunner[I, O]) run(ctx context.Context, in <-chan eras
 		}
 		items[position] = typed
 	}
-	results, report, err := Run(ctx, runner.step, items, runner.options)
+	nestedOptions := runner.options
+	// The enclosing run owns external publication. The nested invocation only
+	// supplies its live report to this barrier runner.
+	nestedOptions.Reporter = nil
+	nestedOptions.registerReport = func(current func() Report) {
+		runner.mutex.Lock()
+		runner.current = current
+		runner.mutex.Unlock()
+	}
+	results, report, err := Run(ctx, runner.step, items, nestedOptions)
 	runner.mutex.Lock()
+	runner.current = nil
 	runner.rep.merge(report)
 	runner.mutex.Unlock()
 	if err != nil {
@@ -758,8 +804,13 @@ func (runner *overrideStageRunner[I, O]) run(ctx context.Context, in <-chan eras
 
 func (runner *overrideStageRunner[I, O]) report() Report {
 	runner.mutex.Lock()
-	defer runner.mutex.Unlock()
-	return runner.rep
+	current := runner.current
+	report := runner.rep.Clone()
+	runner.mutex.Unlock()
+	if current != nil {
+		report.merge(current())
+	}
+	return report
 }
 
 // inflightCall shares one key's execution between duplicate items so a key

@@ -27,6 +27,21 @@ func Bulk[I, O any](s Step[I, O], doBulk func(context.Context, []I) ([]O, error)
 	bulk.override = func(ctx context.Context, current Step[I, O], items []I, o Options, onResult func(context.Context, int, O, execution.CacheOutcome) error) ([]Result[O], Report, error) {
 		return runBulk(ctx, current, doBulk, batchSize, items, o, onResult)
 	}
+	bulk.validateOverride = func(current Step[I, O]) error {
+		if doBulk == nil {
+			return fmt.Errorf("bulk step %q needs a bulk function", current.Name)
+		}
+		if batchSize < 1 {
+			return fmt.Errorf("bulk step %q batch size must be positive", current.Name)
+		}
+		if current.Name == "" {
+			return fmt.Errorf("every step needs a name")
+		}
+		if current.Meter != nil && current.AttemptMeter != nil {
+			return fmt.Errorf("step %q cannot set both Meter and AttemptMeter", current.Name)
+		}
+		return nil
+	}
 	return bulk
 }
 
@@ -157,7 +172,10 @@ func runBulk[I, O any](
 		batches = append(batches, batch{groups: misses[start:end]})
 	}
 
-	runContext, stopReporter := startPeriodicReporter(ctx, o, len(items), report)
+	if o.registerReport != nil {
+		o.registerReport(report)
+	}
+	runContext := ctx
 	progressStop := make(chan struct{})
 	go func() {
 		ticker := time.NewTicker(progressInterval)
@@ -368,10 +386,6 @@ func runBulk[I, O any](
 		return struct{}{}, nil
 	})
 	close(progressStop)
-	reporterErr := stopReporter()
-	if reporterErr != nil {
-		return fail(reporterErr)
-	}
 	if err != nil {
 		return fail(err)
 	}
