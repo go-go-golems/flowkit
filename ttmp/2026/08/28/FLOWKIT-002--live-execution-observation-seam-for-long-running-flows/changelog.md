@@ -58,3 +58,14 @@ Phase 3: hardened zero-observer compatibility, documented lifecycle/snapshot sem
 - /home/manuel/workspaces/2026-08-24/use-optkit/flowkit/examples/progress-reporter/main.go — Executable reporter example
 - /home/manuel/workspaces/2026-08-24/use-optkit/flowkit/flow/observe_test.go — Race and compatibility contract
 
+
+## 2026-08-28
+
+Addressed PR #9 review: root-owned external publication now aggregates nested Batched group/repair progress with stable totals and ordered sequences; all runner validation precedes run_started (commit 89b2107). Repeated tests, full race, vet, and make ci-check pass.
+
+### Related Files
+
+- /home/manuel/workspaces/2026-08-24/use-optkit/flowkit/flow/batch.go — Cumulative nested group and repair reports
+- /home/manuel/workspaces/2026-08-24/use-optkit/flowkit/flow/observe_test.go — Regression tests for both review findings
+- /home/manuel/workspaces/2026-08-24/use-optkit/flowkit/flow/run.go — Root publication ownership and pre-lifecycle runner validation
+

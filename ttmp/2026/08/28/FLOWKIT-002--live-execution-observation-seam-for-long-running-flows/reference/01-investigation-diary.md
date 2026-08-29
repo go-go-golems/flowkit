@@ -326,3 +326,69 @@ A runnable progress-reporter example demonstrates initial, periodic, and termina
 ### Technical details
 - `make ci-check` completed with zero lint issues.
 - The release/publication task remains open until the module is merged/tagged; all local implementation and documentation work is complete.
+
+## Step 6: Correct nested publication ownership and lifecycle validation
+
+PR #9 review identified two correctness gaps in the first observation implementation. Batched group and repair runs shared sequence state but still started independent periodic publishers, so one external reporter could receive competing callbacks with changing totals and partial reports. Invalid runner configuration could also publish `run_started` before runner construction rejected the work.
+
+The correction makes the root execution the only owner of external publication. Nested engines register live report functions with their enclosing runner while their external Reporter is disabled. The root ticker reads the resulting cumulative report. Runner construction and override-specific validation now complete before any lifecycle event or initial snapshot is emitted.
+
+### Prompt Context
+
+**User prompt (verbatim):** "Address https://github.com/go-go-golems/flowkit/pull/9 code review issues. Then  write a detailed project report for the obsidian vault as a deep dive technical analysis blog post using a textbook writing style (no analogies, see skill).      \n Commit and push the bsidian vault when done (go-go-parc vault) about the flowkit work (read design doc and diary to remind yourself of the work we did)"
+
+**Assistant interpretation:** Resolve both unresolved PR review threads with tests, update the implementation diary, then document the complete Flowkit work in the Obsidian vault.
+
+**Inferred user intent:** Make PR #9 technically safe and preserve the architecture, implementation reasoning, failures, and review corrections as durable project knowledge.
+
+**Commit (code):** 89b210703463a3f97404163ec0f1223561943b30 — "FLOWKIT-002: serialize nested progress reporting"
+
+### What I did
+- Added override-specific validators for Bulk and Batched configuration.
+- Probed every stage builder before emitting `run_started` or the initial snapshot.
+- Moved periodic publication ownership for custom engines into `runCore`.
+- Added internal live-report registration so nested execution exposes current counters without calling the external Reporter.
+- Made Batched aggregate completed group work with the active repair report under a mutex.
+- Made pipeline barrier runners expose nested live reports to the outer pipeline publisher.
+- Added tests proving stable root totals, contiguous sequences, cumulative group/repair reports, and zero events/snapshots for invalid plain, Bulk, and Batched runners.
+- Ran repeated focused tests, the full race suite, and `go vet ./...`.
+
+### Why
+- Sequence uniqueness alone does not guarantee callback order or snapshot coherence when multiple goroutines call the same sink.
+- `run_started` is a durable claim that validated execution began; configuration errors must precede it.
+
+### What worked
+- `go test ./flow -count=10` passed.
+- `go test -race ./...` passed across every package.
+- `go vet ./...` passed.
+- Batched periodic snapshots retain the root input total and show completed group work plus active repair work in one report.
+
+### What didn't work
+- The first implementation assumed sharing `observationState` was sufficient for nested execution. It serialized sequence allocation but did not serialize external callback invocation or preserve one cumulative denominator/report.
+
+### What I learned
+- Publication ownership and report aggregation are separate invariants. Shared counters solve identity; a single root-owned ticker solves delivery order and denominator stability.
+- Validation boundaries must include constructor-owned override configuration, not only generic policy and resource plans.
+
+### What was tricky to build
+- Standalone Bulk/Batched runs and custom engines embedded as pipeline barriers need the same ownership rule. A standalone custom engine has no outer stage ticker, while a pipeline barrier already has one. `registerReport` supplies live state upward in both cases, and nested runs always clear their external Reporter.
+- A finished nested report must replace, not coexist with, its live report function. Otherwise the outer report double-counts the same counters. The barrier and Batched aggregators clear the live source before merging the final report.
+
+### What warrants a second pair of eyes
+- The internal report registration seam is intentionally unexported; review locking and callback lifetime under cancellation.
+- Stage builders are constructed once for validation and again for execution. They are currently side-effect free; future builders must preserve that invariant or validation should return prepared runners.
+- Verify Reporter callbacks remain strictly non-concurrent if future runner kinds introduce their own publishers.
+
+### What should be done in the future
+- Resolve the two PR review threads after the pushed commit is visible.
+- Merge and release the Flowkit API, then update RAG-TTC's module requirement.
+
+### Code review instructions
+- Start with `Run` and `runCore` in `flow/run.go`, then follow `registerReport` through `runStages`, `overrideStageRunner`, `runBulk`, and `runBatched`.
+- Run `go test ./flow -count=10`, `go test -race ./...`, `go vet ./...`, and `make ci-check`.
+- Inspect `TestBatchedReporterUsesOneRootPublisherAndStableTotal` and `TestInvalidRunnersEmitNoLifecycleOrSnapshots`.
+
+### Technical details
+- Nested runs retain Ledger step/item events but cannot publish externally.
+- Root `Snapshot.Total` remains the original input length throughout a Batched run.
+- Invalid runner configuration emits neither ledger events nor snapshots.
