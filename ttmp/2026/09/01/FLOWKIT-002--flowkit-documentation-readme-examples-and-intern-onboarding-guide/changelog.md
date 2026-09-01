@@ -22,3 +22,12 @@ Step 2: Added scripts/ package with 24 runnable Example tests covering execution
 
 - /home/manuel/workspaces/2026-09-01/flowkit-documentation/flowkit/scripts/execution_examples_test.go — execution layer examples (Map, Chain, MapCached resume, FileCache corruption)
 
+
+## 2026-09-01
+
+Step 3: Rewrote README (onboarding-first). Wrote intern onboarding design-doc (~40KB) with diagrams, pseudocode, decision records, line-anchored refs.
+
+### Related Files
+
+- /home/manuel/workspaces/2026-09-01/flowkit-documentation/flowkit/README.md — Rewritten README
+

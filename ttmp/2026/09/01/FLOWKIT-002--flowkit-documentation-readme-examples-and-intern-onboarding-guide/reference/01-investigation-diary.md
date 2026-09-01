@@ -285,3 +285,87 @@ intern (and CI) needs.
   caller would write them (qualified `flow.`/`execution.`).
 - `Example*` with `// Output:` are matched by `go test` and shown under `go
   test -v`; they also appear in `go doc`/pkg.go.dev as runnable examples.
+
+## Step 3: Rewrite README and write the intern onboarding design-doc
+
+I rewrote `README.md` to lead with the *problem* and a two-layer mental model,
+then wrote the full intern onboarding design-doc with prose, ASCII diagrams,
+pseudocode, decision records, line-anchored file references, and a phased
+onboarding plan.
+
+### Prompt Context
+
+**User prompt (verbatim):** (see Step 1) — "...imagine you are a new developer joining the project and you have no iea what it is about... Create a detailed analysis / design / implementation guide that is for a new intern... Store in the ticket and the nupload to remarkable."
+
+**Assistant interpretation:** Rewrite the README to be comprehensible from zero, then write a thorough intern onboarding design-doc and store it in the ticket.
+
+**Inferred user intent:** A new intern with no context must be able to read the README + design-doc and understand what Flowkit is and how to use it.
+
+### What I did
+- Rewrote `README.md`: problem-first intro, "what it is not", two-layer ASCII diagram, 30-second tour, run-the-examples, the identity/policy invariant, an API chooser table, and links to the new onboarding guide + developer guide + examples.
+- Wrote the design-doc (`design-doc/01-flowkit-intern-onboarding-and-implementation-guide.md`, ~40KB): executive summary, problem, glossary, two-layer architecture + non-goals, package map, full `execution` layer walkthrough (Map diagram, limiters/budgets/rates, Key+FileCache+MySQLCache, MapCached flow, preflight), full `flow` layer (Step, Run engine with pseudocode, Options/runEnv, classification, failure modes, pipelines diagram, Bulk, Batched, observation, Store seam), a worked example, the 9 critical invariants, 5 decision records, an 11-step phased onboarding plan, test strategy, risks, and line-anchored references.
+- Gathered line anchors via grep for every key symbol to cite precisely.
+
+### Why
+The old README opened with generics and `Identity`/`Policy` and never said what
+problem the library solves. The design-doc is the "from zero" narrative the
+README links to; the README is the "30 seconds to decide this is relevant"
+page. Together they cover both the browse-path and the study-path reader.
+
+### What worked
+- `go build ./...` and `GOWORK=off go test ./...` still green after the README
+  rewrite (README has no code, but the design-doc links to `scripts/` examples
+  that are verified).
+- Line anchors were gathered programmatically and cross-checked against the
+  source, so the references in the design-doc are real, not invented.
+
+### What didn't work
+- Nothing failed in this step.
+
+### What I learned
+- The `runEnv.ensure` preflight has a subtle "reference vs declaration" rule:
+  a zero-valued `Resource{Name:...}` reuses an earlier full declaration, but a
+  zero resource with NO earlier declaration becomes a zero plan that admits
+  nothing and fails loudly on first spend. This is a footgun worth teaching
+  explicitly (documented in §5.3 and the risks).
+- `flow` exposes `Options.Declare/Limiter/Snapshots/Cost` specifically so
+  non-step consumers (legacy per-call caches) can draw from shared budgets —
+  a detail easy to miss when reading only `Run`.
+
+### What was tricky to build
+- Keeping the design-doc's pseudocode honest. I wrote `process`/`lead`/`work`/
+  `success`/`fail` pseudocode from `flow/run.go` and then re-checked each
+  branch against the actual source (e.g. that `AttemptMeter` runs on every
+  attempt including errors, that `Meter` runs only on success, that store
+  uses `context.WithoutCancel`). The pseudocode is a faithful summary, not a
+  re-implementation.
+- Choosing what to leave to the existing `docs/flowkit-developer-guide.md`
+  (reference tables) vs. the new doc (narrative + diagrams + onboarding plan).
+  They are complementary, not duplicative.
+
+### What warrants a second pair of eyes
+- The line anchors in §12 are point-in-time; if the source is reformatted they
+  drift. They are accurate as of commit (this step). A future CI job could
+  check them, but that is out of scope.
+- The "at most one in-flight item per worker lost" claim is the central
+  resume guarantee; it rests on the `context.WithoutCancel` store calls.
+  Confirmed in `flow/run.go` `success`, `execution/cached_map.go`, and
+  `flow/bulk.go` store calls.
+
+### What should be done in the future
+- Add a `go test ./scripts/` step to CI (it currently runs the whole suite, so
+  it is covered, but an explicit note would help).
+- Consider a `testing.Short()`-guarded `MySQLCache` example.
+
+### Code review instructions
+- Read `README.md` top-to-bottom; click through to the design-doc.
+- Read the design-doc §4–§5 alongside the cited source lines; spot-check 3–4
+  line anchors.
+- Run `go test ./scripts/ -v` to confirm the examples the doc references
+  still pass.
+
+### Technical details
+- Design-doc frontmatter follows the docmgr design-doc template (Topics,
+  DocType, Summary, WhatFor, WhenToUse).
+- README links use relative paths into `ttmp/.../design-doc/...` so the bundle
+  upload and local browsing resolve the same target.
