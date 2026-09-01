@@ -124,9 +124,21 @@ classification, all three failure modes, admission budgets, the monetary
 preflight, shared budgets, streaming pipelines, `Bulk`, `Batched` (group +
 repair), metering, the event ledger, and a custom `Store` swap.
 
-There are also three tiny runnable programs in [`examples/`](./examples):
-[`bounded-map`](./examples/bounded-map), [`cached-step`](./examples/cached-step),
-[`pipeline`](./examples/pipeline).
+There is also one complete, runnable end-to-end program in
+[`examples/full-run`](./examples/full-run) — it wires a cached, retryable,
+budgeted step against an on-disk `FileCache` and runs it twice so you can watch
+"resume = replay", retry, and quarantine happen:
+
+```bash
+go run ./examples/full-run
+```
+
+The relationship between the two example homes is deliberate:
+
+- [`examples/`](./examples) — **one** complete, runnable `main()` program that
+  ties the whole story together (`go run ./examples/full-run`).
+- [`scripts/`](./scripts) — the exhaustive, **verified** per-API reference
+  (`go test ./scripts/ -v`), with checked `// Output:` blocks.
 
 ## The one invariant that makes everything work
 
