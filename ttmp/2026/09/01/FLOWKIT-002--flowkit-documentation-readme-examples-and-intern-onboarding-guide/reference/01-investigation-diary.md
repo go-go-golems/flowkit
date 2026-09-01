@@ -369,3 +369,57 @@ page. Together they cover both the browse-path and the study-path reader.
   DocType, Summary, WhatFor, WhenToUse).
 - README links use relative paths into `ttmp/.../design-doc/...` so the bundle
   upload and local browsing resolve the same target.
+
+## Step 4: Validate and upload to reMarkable
+
+Ran `docmgr doctor` (passed cleanly), bundled the design-doc + README +
+scripts/README + diary, dry-run, then uploaded to reMarkable.
+
+### Prompt Context
+
+**User prompt (verbatim):** (see Step 1) — "...Store in the ticket and the nupload to remarkable."
+
+**Assistant interpretation:** Validate the ticket with docmgr doctor, then bundle-upload the deliverables to reMarkable.
+
+**Inferred user intent:** Final delivery: a verified, reMarkable-published onboarding package.
+
+### What I did
+- `docmgr doctor --ticket FLOWKIT-002 --stale-after 30` → "All checks passed" (1 finding, all green).
+- `remarquee upload bundle --dry-run ...` → confirmed 4 files, pandoc→PDF, upload to `/ai/2026/09/01/FLOWKIT-002`.
+- `remarquee upload bundle ...` → `OK: uploaded FLOWKIT-002 Flowkit Onboarding Guide.pdf -> /ai/2026/09/01/FLOWKIT-002`.
+
+### Why
+Doctor validates frontmatter/relations/vocabulary before publishing; the
+bundle gives the receiver one PDF with a ToC covering the onboarding guide,
+the README, the examples index, and the diary.
+
+### What worked
+- Upload succeeded on the first real attempt (auto-reauth not needed).
+
+### What didn't work
+- Nothing.
+
+### What I learned
+- The remarquee skill's "one call, no pre-checks" guidance is correct: the
+  dry-run was the only extra call, and it confirmed the bundle before spending
+  the real upload.
+
+### What was tricky to build
+- n/a.
+
+### What warrants a second pair of eyes
+- The bundle includes two files titled "README" (repo README + scripts
+  README); the ToC disambiguates them by source path but a reader sees two
+  "README" entries. Acceptable for an internal deliverable.
+
+### What should be done in the future
+- Consider naming `scripts/README.md` distinctly in the bundle via a
+  remarquee title override if the dual-"README" ToC is confusing.
+
+### Code review instructions
+- Verify: `docmgr doctor --ticket FLOWKIT-002 --stale-after 30` passes.
+- Verify on device: the PDF is at `/ai/2026/09/01/FLOWKIT-002`.
+
+### Technical details
+- Bundle = design-doc + README.md + scripts/README.md + diary, `--toc-depth 2`.
+- Remote: `/ai/2026/09/01/FLOWKIT-002/FLOWKIT-002 Flowkit Onboarding Guide.pdf`.

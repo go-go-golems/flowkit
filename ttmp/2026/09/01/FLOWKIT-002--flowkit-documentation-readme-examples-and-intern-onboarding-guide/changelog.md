@@ -31,3 +31,13 @@ Step 3: Rewrote README (onboarding-first). Wrote intern onboarding design-doc (~
 
 - /home/manuel/workspaces/2026-09-01/flowkit-documentation/flowkit/README.md — Rewritten README
 
+
+## 2026-09-01
+
+Step 4: docmgr doctor passed; uploaded bundle (design-doc + README + scripts/README + diary) to reMarkable at /ai/2026/09/01/FLOWKIT-002.
+
+
+## 2026-09-01
+
+Ticket closed
+
