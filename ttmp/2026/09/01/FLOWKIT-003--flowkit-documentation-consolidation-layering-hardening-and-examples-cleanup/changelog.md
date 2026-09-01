@@ -13,3 +13,13 @@ Fixes #2 #3 implemented: boundary_layering_test.go + examples consolidation (ful
 
 - /home/manuel/workspaces/2026-09-01/flowkit-documentation/flowkit/boundary_layering_test.go — layering boundary test
 
+
+## 2026-09-01
+
+Step 2: refreshed guide in docs/guides/, consolidation design-doc, doctor passed, bundle uploaded to /ai/2026/09/01/FLOWKIT-003.
+
+
+## 2026-09-01
+
+Ticket closed
+
