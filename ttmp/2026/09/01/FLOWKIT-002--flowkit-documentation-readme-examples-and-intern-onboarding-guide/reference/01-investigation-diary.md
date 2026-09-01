@@ -23,12 +23,36 @@ RelatedFiles:
       Note: Step[I,O] = Identity+Policy+Do; identity vs policy discipline
     - Path: repo://flow/store.go
       Note: Store durability seam (FileCache/MemoryStore/MySQLCache)
+    - Path: repo://scripts/README.md
+      Note: Runnable verified example for the onboarding guide
+    - Path: repo://scripts/bulk_batch_examples_test.go
+      Note: Runnable verified example for the onboarding guide
+    - Path: repo://scripts/doc.go
+      Note: Runnable verified example for the onboarding guide
+    - Path: repo://scripts/execution_examples_test.go
+      Note: Runnable verified example for the onboarding guide
+    - Path: repo://scripts/observe_examples_test.go
+      Note: Runnable verified example for the onboarding guide
+    - Path: repo://scripts/pipeline_examples_test.go
+      Note: Runnable verified example for the onboarding guide
+    - Path: repo://scripts/policy_examples_test.go
+      Note: Runnable verified example for the onboarding guide
+    - Path: repo://scripts/step_examples_test.go
+      Note: Runnable verified example for the onboarding guide
 ExternalSources: []
 Summary: 'Chronological investigation diary for FLOWKIT-002: analyzing flowkit, writing examples, README, and an intern onboarding guide.'
 LastUpdated: 2026-09-01T17:45:00-04:00
 WhatFor: Record what flowkit is, how its parts fit together, what was tried, and how to validate the documentation deliverables.
 WhenToUse: Read before resuming FLOWKIT-002 work; review the analysis-to-date before editing the onboarding guide.
 ---
+
+
+
+
+
+
+
+
 
 
 
@@ -161,3 +185,103 @@ do not duplicate, and so I can fill the "from zero" gap the README leaves).
   stages), then a collector restores input order via `item.index`.
 - Duplicate-key suppression in `flow` uses an `inflightCall` map so a key runs
   once per process; followers copy the leader's outcome.
+
+## Step 2: Write runnable, verified examples in scripts/
+
+I created a new top-level `scripts/` package as **tested documentation**: Go
+`Example` functions with `// Output:` blocks, so `go test ./scripts/ -v` both
+documents and verifies the API. 24 examples across 6 files cover the whole
+public surface.
+
+### Prompt Context
+
+**User prompt (verbatim):** (see Step 1) — "...write examples tests in the scripts/ folder..."
+
+**Assistant interpretation:** Build a `scripts/` directory of examples that are also tests, covering every core API, so an intern can read and run them.
+
+**Inferred user intent:** Examples must be real (runnable, verified) and pedagogical — each one a self-contained copy-paste recipe.
+
+### What I did
+- Created `scripts/doc.go` (package doc) + 6 `*_examples_test.go` files + `helpers_test.go` + `README.md`.
+- Coverage: `execution.Map`, `Chain(budget,rate)`, `MapCached` (+ a resume-after-"crash" demo), `FileCache` fail-closed corruption; `flow.Step` cached/uncached/dedup, retry+classifier, `AsDataError` quarantine; `FailureMode` fail-fast/skip, admission spend, `Preflight` monetary gate, `Options.Share()`, rate-after-budget; `Pipe2`/`Pipe3`, quarantine-bypass; `Bulk`, `Batched` (group+repair); `Meter`/`AttemptMeter`, `Ledger`, `OnResult`, custom `Store` swap.
+- Verified: `go test ./scripts/ -v` → 24/24 PASS; full `GOWORK=off go test ./...` green; `gofmt` clean.
+
+### Why
+The existing `examples/*/main.go` are tiny `func main()` programs with no
+assertions — fine to run but they cannot prove the documented behavior holds.
+`Example` functions with `// Output:` are the Go-idiomatic way to make examples
+that are both readable and continuously verified, which is exactly what an
+intern (and CI) needs.
+
+### What worked
+- All examples pass first try (after two fixes, below). The resume example
+  (`ExampleMapCached_resume`) is the most compelling onboarding demo: run 1
+  stores 3 items, then a "new process" re-runs `[1,2,3,4]` and reports
+  `hits=3 misses=1 work=1` — concrete proof of "resume = replay".
+
+### What didn't work
+- `ExampleFileCache_corruptionFailsClosed` initially asserted `err == ErrCorruptCache`.
+  `FileCache.Load` wraps the error with `%w`, so direct `==` is false. Fixed
+  with `errors.Is(err, execution.ErrCorruptCache)`.
+- `ExampleBatched` initially omitted position 1 of *every* group (used
+  `if i == 1`), forcing 2 repairs instead of 1. Fixed by keying the omission on
+  the actual content (`if g[i] == "b"`) so only the first group is short.
+- Go's example-name validator (`go vet`) rejected `ExampleMeter` and
+  `ExampleOnResult` with "refers to unknown identifier": the prefix before the
+  first `_` must be a *top-level* identifier in an imported package, but
+  `Meter`/`OnResult` are struct *fields* of `flow.Step`. Renamed to
+  `ExampleMeters` (matches `flow.Meters` type) and `ExampleStep_onResult`
+  (`Step` is top-level, `onResult` is a freeform label).
+
+### What I learned
+- The example-naming rule (the hard way): `ExampleFoo` requires `Foo` to be a
+  top-level identifier in an imported package; `ExampleType_label` requires
+  `Type` to be top-level (the `label` after `_` is freeform). Field names are
+  not accepted as the leading component. This is why `ExampleStep_cached`,
+  `ExampleMap`, `ExampleBulk` worked but `ExampleMeter`/`ExampleOnResult` did
+  not.
+- `Budget.Snapshot()` prints as `{limit spent remaining}` (struct literal
+  form), which is handy for example outputs.
+- `flow.Options{}.Share()` is idempotent and the returned value must be reused
+  (not the original) for budgets to be shared across `Run` calls — the shared
+  env lives on the returned copy.
+
+### What was tricky to build
+- Making the `Batched` example deterministic and understandable. The
+  semantics are subtle: `Group` returns index groups, `DoAll` makes one call
+  per group returning a position-keyed response, `Split` parses it, and any
+  missing/unparseable/failed member is routed to the `repair` step. I had to
+  deliberately manufacture exactly one missing member to show the repair path
+  without the example becoming noise.
+- Keeping example outputs deterministic under concurrency. I used
+  `Workers: 1` and input order for the `OnResult` streaming example so the
+  completion order matches input order; other examples print only
+  order-independent aggregates (counts, sums) so `Workers: 2` is safe.
+
+### What warrants a second pair of eyes
+- The `ExamplePolicy_sharedBudgets` comment claims the second run's items are
+  "cache misses under a different key" — true because keys `[3]`/`[4]` differ
+  from `[1]`/`[2]`, so they draw from the shared budget. If someone later
+  reuses items across the two runs the budget arithmetic would change and the
+  Output would break. The intent is documented in the comment.
+- All example outputs depend on documented invariants (order alignment,
+  hits-are-free, duplicate suppression). If those invariants ever change, the
+  examples will fail loudly — which is the point.
+
+### What should be done in the future
+- Add an example wiring a real `*sql.DB`-backed `MySQLCache` (guarded by a
+  build tag or `testing.Short()` skip) so the MySQL path has a runnable demo
+  without forcing Docker on every contributor. Left out now to keep `scripts/`
+  hermetic.
+
+### Code review instructions
+- Start at `scripts/doc.go` for the map; run `go test ./scripts/ -v` to see
+  every example execute.
+- Validate: `GOWORK=off go test -race ./scripts/ -count=1` (concurrency paths)
+  and `gofmt -l scripts/` (clean).
+
+### Technical details
+- Package: `examples_test` (external test package), so examples read like a
+  caller would write them (qualified `flow.`/`execution.`).
+- `Example*` with `// Output:` are matched by `go test` and shown under `go
+  test -v`; they also appear in `go doc`/pkg.go.dev as runnable examples.
