@@ -11,6 +11,10 @@ topics:
       description: Onboarding and intern-friendly learning material
     - slug: examples
       description: Runnable examples and tests demonstrating usage
+    - slug: consolidation
+      description: Consolidating duplicated code, docs, or examples
+    - slug: testing
+      description: Tests, boundary tests, and validation
 docTypes:
     - slug: design-doc
       description: Architecture and implementation design document
