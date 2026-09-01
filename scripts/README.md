@@ -51,4 +51,4 @@ Flowkit runs expensive, repeatable work over a list of inputs and:
 It is **not** a workflow engine, DAG scheduler, or distributed coordinator.
 There is no persisted control state — durability is memoization.
 
-See the [intern onboarding guide](../ttmp/2026/09/01/FLOWKIT-002--flowkit-documentation-readme-examples-and-intern-onboarding-guide/design-doc/01-flowkit-intern-onboarding-and-implementation-guide.md) for the full narrative.
+See the [intern onboarding guide](../docs/guides/01-flowkit-intern-onboarding-and-implementation-guide.md) for the full narrative.

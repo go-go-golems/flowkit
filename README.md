@@ -165,7 +165,7 @@ you get cache hits (also correct).
 
 ## Documentation
 
-- **[Intern onboarding & implementation guide](./ttmp/2026/09/01/FLOWKIT-002--flowkit-documentation-readme-examples-and-intern-onboarding-guide/design-doc/01-flowkit-intern-onboarding-and-implementation-guide.md)** — start here if you're new. A full narrative tour with diagrams, pseudocode, API references, and file references.
+- **[Intern onboarding & implementation guide](./docs/guides/01-flowkit-intern-onboarding-and-implementation-guide.md)** — start here if you're new. A full narrative tour with diagrams, pseudocode, API references, and file references.
 - **[Developer guide](./docs/flowkit-developer-guide.md)** — reference-style concepts, API guidance, invariants, and a troubleshooting table (Glazed help entry, also available via `flowkit help`).
 - **[Runnable examples](./scripts/)** — verified, copy-paste recipes for every public API.
 - **[Extraction design & implementation guide](./ttmp/2026/08/12/FLOWKIT-001--extract-flow-and-execution-from-ragkit/design-doc/01-flowkit-extraction-architecture-and-implementation-guide.md)** — how Flowkit was extracted from ragkit and the compatibility contract.
