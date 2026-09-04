@@ -5,7 +5,7 @@ Flowkit has **two** example homes, by design:
 | Home | What it is | How to run | When to read it |
 |---|---|---|---|
 | [`examples/`](.) | **One** complete, runnable `main()` program that ties the whole story together (cached step + retry + budget + on-disk cache + replay + quarantine). | `go run ./examples/full-run` | When you want to see the entire library work end-to-end as a program. |
-| [`../scripts/`](../scripts) | The exhaustive, **verified** per-API reference — 24 `Example` functions with checked `// Output:` blocks. | `go test ../scripts/ -v` | When you want a copy-paste recipe for one specific API. |
+| [`../scripts/`](../scripts) | The exhaustive, **verified** per-API reference — 24 `Example` functions with checked `// Output:` blocks. | `go test ./scripts/ -v` | When you want a copy-paste recipe for one specific API. |
 
 ## Run the end-to-end program
 

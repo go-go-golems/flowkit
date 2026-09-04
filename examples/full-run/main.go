@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/go-go-golems/flowkit/execution"
@@ -25,36 +26,62 @@ import (
 // fakeProvider is a stand-in for an expensive, occasionally-flaky API call.
 // It counts how many times it is actually invoked so the report can prove
 // caching works. failedOnce records which items have already burned their
-// one transient failure, so the retry path is deterministic.
+// one transient failure, so the retry path is deterministic. Because the
+// step runs with Workers > 1, every access to this shared state is guarded by
+// a mutex so the example stays race-free and deterministic under concurrent
+// execution.
 type fakeProvider struct {
+	mu         sync.Mutex
 	calls      int
 	failedOnce map[int]bool
 }
 
 func (p *fakeProvider) summarize(_ context.Context, n int) (int, error) {
+	p.mu.Lock()
 	if p.failedOnce == nil {
 		p.failedOnce = map[int]bool{}
 	}
 	p.calls++
+	current := p.calls
 	// Item 3 fails once with a transient 503, then succeeds on retry.
 	// A typed *flow.StatusError lets DefaultClassifier classify 5xx as Transient.
 	if n == 3 && !p.failedOnce[n] {
 		p.failedOnce[n] = true
-		return 0, &flow.StatusError{Status: 503, Err: fmt.Errorf("transient")}
+		p.mu.Unlock()
+		return 0, &flow.StatusError{Status: 503, Err: fmt.Errorf("transient (attempt %d)", current)}
 	}
+	p.mu.Unlock()
 	return n * 10, nil
+}
+
+// reset clears the call counter between runs (the cache makes the provider a
+// no-op on replay, so this only affects reporting).
+func (p *fakeProvider) reset() {
+	p.mu.Lock()
+	p.calls = 0
+	p.mu.Unlock()
 }
 
 func main() {
 	ctx := context.Background()
 
-	// A durable, on-disk cache so completed work survives a "crash" (a second
-	// process invocation reuses it).
-	dir, err := os.MkdirTemp("", "flowkit-full-run-*")
-	if err != nil {
-		panic(err)
+	// The on-disk cache makes completed work durable. By default this uses a
+	// throwaway temp directory cleaned up at exit, which demonstrates
+	// same-process replay (run 2 reuses run 1's entries). To see true
+	// cross-process resume, set FLOWKIT_FULL_RUN_CACHE to a stable path and run
+	// the program twice: the second invocation replays the first's cache hits.
+	// (This mirrors how a real application points FileCache at a fixed dir.)
+	dir := os.Getenv("FLOWKIT_FULL_RUN_CACHE")
+	cleanup := func() {}
+	if dir == "" {
+		tmp, err := os.MkdirTemp("", "flowkit-full-run-*")
+		if err != nil {
+			panic(err)
+		}
+		dir = tmp
+		cleanup = func() { _ = os.RemoveAll(tmp) }
 	}
-	defer func() { _ = os.RemoveAll(dir) }()
+	defer cleanup()
 
 	store, err := execution.NewFileCache(execution.FileCacheOptions{Directory: dir})
 	if err != nil {
@@ -99,8 +126,9 @@ func main() {
 	printRun("run 1 (fresh)", r1, rep1, provider.calls)
 
 	// Run 2: same inputs, same on-disk cache -> everything is a hit, the
-	// provider is never called. This is "resume = replay".
-	provider.calls = 0
+	// provider is never called. This is same-process replay; with
+	// FLOWKIT_FULL_RUN_CACHE set, a second process would see the same hits.
+	provider.reset()
 	r2, rep2, err := flow.Run(ctx, step, items, flow.Options{
 		Store: store,
 		Preflight: &flow.Preflight{
@@ -121,7 +149,7 @@ func main() {
 		}
 		return provider.summarize(ctx, n)
 	}
-	provider.calls = 0
+	provider.reset()
 	r3, rep3, err := flow.Run(ctx, quarantineStep, []int{1, 6}, flow.Options{Store: store})
 	if err != nil {
 		panic(err)
