@@ -27,6 +27,21 @@ func Bulk[I, O any](s Step[I, O], doBulk func(context.Context, []I) ([]O, error)
 	bulk.override = func(ctx context.Context, current Step[I, O], items []I, o Options, onResult func(context.Context, int, O, execution.CacheOutcome) error) ([]Result[O], Report, error) {
 		return runBulk(ctx, current, doBulk, batchSize, items, o, onResult)
 	}
+	bulk.validateOverride = func(current Step[I, O]) error {
+		if doBulk == nil {
+			return fmt.Errorf("bulk step %q needs a bulk function", current.Name)
+		}
+		if batchSize < 1 {
+			return fmt.Errorf("bulk step %q batch size must be positive", current.Name)
+		}
+		if current.Name == "" {
+			return fmt.Errorf("every step needs a name")
+		}
+		if current.Meter != nil && current.AttemptMeter != nil {
+			return fmt.Errorf("step %q cannot set both Meter and AttemptMeter", current.Name)
+		}
+		return nil
+	}
 	return bulk
 }
 
@@ -138,10 +153,8 @@ func runBulk[I, O any](
 		for _, index := range group.indexes {
 			counts.Hits++
 			results[index] = Result[O]{Value: loaded, Cache: outcome}
-			if o.Ledger != nil {
-				if err := o.Ledger.Event(ctx, Event{Step: s.Name, Index: index, Type: EventHit}); err != nil {
-					return fail(fmt.Errorf("step %q: ledger event: %w", s.Name, err))
-				}
+			if err := emitLedger(ctx, o, Event{Step: s.Name, Index: index, Type: EventHit}); err != nil {
+				return fail(fmt.Errorf("step %q: %w", s.Name, err))
 			}
 			if err := notify(index, loaded, outcome); err != nil {
 				return fail(err)
@@ -159,8 +172,11 @@ func runBulk[I, O any](
 		batches = append(batches, batch{groups: misses[start:end]})
 	}
 
+	if o.registerReport != nil {
+		o.registerReport(report)
+	}
+	runContext := ctx
 	progressStop := make(chan struct{})
-	defer close(progressStop)
 	go func() {
 		ticker := time.NewTicker(progressInterval)
 		defer ticker.Stop()
@@ -198,7 +214,7 @@ func runBulk[I, O any](
 		mutex.Unlock()
 	}
 
-	_, err := execution.Map(ctx, batches, execution.MapOptions[batch]{
+	_, err := execution.Map(runContext, batches, execution.MapOptions[batch]{
 		Workers: max(s.Policy.Workers, 1),
 	}, func(ctx context.Context, current batch) (struct{}, error) {
 		units := len(current.groups)
@@ -282,15 +298,13 @@ func runBulk[I, O any](
 					}
 					counts.RetriesByClass[lastClass.String()]++
 				})
-				if o.Ledger != nil {
-					for _, group := range current.groups {
-						for _, index := range group.indexes {
-							if err := o.Ledger.Event(ctx, Event{
-								Step: s.Name, Index: index, Type: EventRetry,
-								Class: lastClass.String(), Attempt: attempt, Error: err.Error(),
-							}); err != nil {
-								return struct{}{}, fmt.Errorf("step %q: ledger event: %w", s.Name, err)
-							}
+				for _, group := range current.groups {
+					for _, index := range group.indexes {
+						if err := emitLedger(ctx, o, Event{
+							Step: s.Name, Index: index, Type: EventRetry,
+							Class: lastClass.String(), Attempt: attempt, Error: err.Error(),
+						}); err != nil {
+							return struct{}{}, fmt.Errorf("step %q: %w", s.Name, err)
 						}
 					}
 				}
@@ -319,13 +333,11 @@ func runBulk[I, O any](
 						}}
 					}
 					mutex.Unlock()
-					if o.Ledger != nil {
-						if err := o.Ledger.Event(ctx, Event{
-							Step: s.Name, Index: index, Type: eventType,
-							Class: lastClass.String(), Error: lastErr.Error(),
-						}); err != nil {
-							return struct{}{}, fmt.Errorf("step %q: ledger event: %w", s.Name, err)
-						}
+					if err := emitLedger(ctx, o, Event{
+						Step: s.Name, Index: index, Type: eventType,
+						Class: lastClass.String(), Error: lastErr.Error(),
+					}); err != nil {
+						return struct{}{}, fmt.Errorf("step %q: %w", s.Name, err)
 					}
 				}
 			}
@@ -363,10 +375,8 @@ func runBulk[I, O any](
 			}
 			mutex.Unlock()
 			for _, index := range group.indexes {
-				if o.Ledger != nil {
-					if err := o.Ledger.Event(ctx, Event{Step: s.Name, Index: index, Type: eventType}); err != nil {
-						return struct{}{}, fmt.Errorf("step %q: ledger event: %w", s.Name, err)
-					}
+				if err := emitLedger(ctx, o, Event{Step: s.Name, Index: index, Type: eventType}); err != nil {
+					return struct{}{}, fmt.Errorf("step %q: %w", s.Name, err)
 				}
 				if err := notify(index, value, outcome); err != nil {
 					return struct{}{}, err
@@ -375,6 +385,7 @@ func runBulk[I, O any](
 		}
 		return struct{}{}, nil
 	})
+	close(progressStop)
 	if err != nil {
 		return fail(err)
 	}

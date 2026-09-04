@@ -163,12 +163,27 @@ you get cache hits (also correct).
 | Group response with missing-item repair | `flow.Batched` |
 | Swap the durable storage | implement `flow.Store` (2 methods) |
 
+## Live progress
+
+Configure a `flow.Reporter` to receive deep-cloned initial, periodic, and terminal snapshots without parsing logs. Exact item and lifecycle events remain available through `flow.Ledger`; configured sink failures fail closed.
+
+```go
+options := flow.Options{
+    Reporter: flow.ReporterFunc(writeSnapshot),
+    ReportInterval: 2 * time.Second,
+}
+results, report, err := flow.Run(ctx, step, inputs, options)
+```
+
+Run the complete example with `go run ./examples/progress-reporter`.
+
 ## Documentation
 
 - **[Intern onboarding & implementation guide](./docs/guides/01-flowkit-intern-onboarding-and-implementation-guide.md)** — start here if you're new. A full narrative tour with diagrams, pseudocode, API references, and file references.
 - **[Developer guide](./docs/flowkit-developer-guide.md)** — reference-style concepts, API guidance, invariants, and a troubleshooting table (Glazed help entry, also available via `flowkit help`).
 - **[Runnable examples](./scripts/)** — verified, copy-paste recipes for every public API.
 - **[Extraction design & implementation guide](./ttmp/2026/08/12/FLOWKIT-001--extract-flow-and-execution-from-ragkit/design-doc/01-flowkit-extraction-architecture-and-implementation-guide.md)** — how Flowkit was extracted from ragkit and the compatibility contract.
+- [Progress reporter example](./examples/progress-reporter)
 
 ## Compatibility contract
 

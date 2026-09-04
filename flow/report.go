@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"time"
 
 	"github.com/go-go-golems/flowkit/execution"
 )
@@ -102,9 +103,71 @@ func (report *Report) merge(other Report) {
 	}
 }
 
+// Clone returns a fully independent report snapshot. Every map is copied so
+// a reporter can retain the value while runners continue updating counters.
+func (report Report) Clone() Report {
+	if report.Steps == nil {
+		return Report{}
+	}
+	cloned := Report{Steps: make(map[string]StepReport, len(report.Steps))}
+	for name, step := range report.Steps {
+		cloned.Steps[name] = step.Clone()
+	}
+	return cloned
+}
+
+// Clone returns a fully independent step report.
+func (report StepReport) Clone() StepReport {
+	cloned := report
+	if report.RetriesByClass != nil {
+		cloned.RetriesByClass = make(map[string]int, len(report.RetriesByClass))
+		for class, count := range report.RetriesByClass {
+			cloned.RetriesByClass[class] = count
+		}
+	}
+	if report.Spend != nil {
+		cloned.Spend = make(map[string]execution.BudgetSnapshot, len(report.Spend))
+		for name, snapshot := range report.Spend {
+			cloned.Spend[name] = snapshot
+		}
+	}
+	if report.Meters != nil {
+		cloned.Meters = make(Meters, len(report.Meters))
+		cloned.Meters.Add(report.Meters)
+	}
+	return cloned
+}
+
 // Step returns the named step's report (zero value when absent).
 func (report Report) Step(name string) StepReport {
 	return report.Steps[name]
+}
+
+// Snapshot is one immutable aggregate observation of a running flow. Sequence
+// increases within one top-level Run call. Report is a deep clone and may be
+// retained by the receiver after Report returns.
+type Snapshot struct {
+	Sequence  uint64    `json:"sequence"`
+	StartedAt time.Time `json:"started_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Total     int       `json:"total"`
+	Terminal  bool      `json:"terminal"`
+	Report    Report    `json:"report"`
+}
+
+// Reporter receives periodic and terminal aggregate snapshots. A reporter
+// error fails the run: callers that want best-effort telemetry should wrap
+// their reporter and deliberately swallow its errors.
+type Reporter interface {
+	Report(context.Context, Snapshot) error
+}
+
+// ReporterFunc adapts a function to Reporter.
+type ReporterFunc func(context.Context, Snapshot) error
+
+// Report implements Reporter.
+func (f ReporterFunc) Report(ctx context.Context, snapshot Snapshot) error {
+	return f(ctx, snapshot)
 }
 
 // Result carries one item's outcome, position-aligned with the input:
@@ -125,6 +188,18 @@ type Result[O any] struct {
 type EventType string
 
 const (
+	// EventRunStarted records the boundary after validation and preflight and
+	// before the first item is admitted.
+	EventRunStarted EventType = "run_started"
+	// EventStepStarted records one pipeline stage runner starting. Streaming
+	// downstream stages may start before their first item arrives.
+	EventStepStarted EventType = "step_started"
+	// EventStepCompleted records one stage draining successfully.
+	EventStepCompleted EventType = "step_completed"
+	// EventRunCompleted records a successful terminal run boundary.
+	EventRunCompleted EventType = "run_completed"
+	// EventRunFailed records a failed or canceled terminal run boundary.
+	EventRunFailed EventType = "run_failed"
 	// EventHit records a cache hit (free).
 	EventHit EventType = "hit"
 	// EventStored records fresh work committed to the store.
@@ -142,11 +217,13 @@ const (
 // Event is one observable moment of a run, suitable for appending to an
 // experiment run's JSONL journal.
 type Event struct {
-	Step    string    `json:"step"`
+	At      time.Time `json:"at"`
+	Step    string    `json:"step,omitempty"`
 	Index   int       `json:"index"`
 	Type    EventType `json:"type"`
 	Class   string    `json:"class,omitempty"`
 	Attempt int       `json:"attempt,omitempty"`
+	Total   int       `json:"total,omitempty"`
 	Error   string    `json:"error,omitempty"`
 }
 

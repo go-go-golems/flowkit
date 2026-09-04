@@ -61,6 +61,9 @@ type Step[I, O any] struct {
 	// Run passes the current Step value so configuration applied after the
 	// constructor remains authoritative at validation and execution time.
 	override func(context.Context, Step[I, O], []I, Options, func(context.Context, int, O, execution.CacheOutcome) error) ([]Result[O], Report, error)
+	// validateOverride checks constructor-owned configuration before lifecycle
+	// observation begins. Plain steps are validated by their stage builder.
+	validateOverride func(Step[I, O]) error
 	// extraPlans declares admission resources consumed by an override's
 	// nested steps (Batched repairs) so the shared preflight sees them
 	// before item one.
