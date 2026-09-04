@@ -5,6 +5,20 @@ topics:
       description: Go language and tooling
     - slug: migration
       description: Code and data migration work
-docTypes: []
+    - slug: documentation
+      description: Documentation, README, examples, and guides
+    - slug: onboarding
+      description: Onboarding and intern-friendly learning material
+    - slug: examples
+      description: Runnable examples and tests demonstrating usage
+    - slug: consolidation
+      description: Consolidating duplicated code, docs, or examples
+    - slug: testing
+      description: Tests, boundary tests, and validation
+docTypes:
+    - slug: design-doc
+      description: Architecture and implementation design document
+    - slug: reference
+      description: Reference material and investigation diary
 intent: []
 status: []

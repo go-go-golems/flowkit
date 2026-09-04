@@ -194,9 +194,8 @@ Run unit and race tests after touching caches, budgets, reports, in-flight dedup
 ## See Also
 
 - [`../README.md`](../README.md) — package overview and quick start.
-- [`../examples/bounded-map`](../examples/bounded-map) — ordered bounded execution.
-- [`../examples/cached-step`](../examples/cached-step) — cache hits, duplicate suppression, and reports.
-- [`../examples/pipeline`](../examples/pipeline) — typed streaming composition.
+- [`../examples/full-run`](../examples/full-run) — one complete runnable program (cached + retry + budget + replay).
+- [`../scripts`](../scripts) — exhaustive verified per-API Example tests (`go test ./scripts/ -v`).
 - [`../examples/progress-reporter`](../examples/progress-reporter) — immutable live snapshot reporting.
 - [`../flow/doc.go`](../flow/doc.go) — package scope and non-goals.
 - [`../execution/doc.go`](../execution/doc.go) — low-level execution package contract.
